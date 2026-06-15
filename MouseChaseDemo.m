@@ -15,6 +15,12 @@ function MouseChaseDemo()
     xMax = figPos(3) / figPos(4);
     yMax = 1;
     
+    % Store all touches for the running session
+    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'Type', {});
+    startTime = tic;
+    touchLogSaved = false;
+    isTouchActive = false;
+    
     % Create axes for drawing and lock the aspect ratio
     ax = axes(fig, 'Position', [0 0 1 1], ...
         'XLim', [0 xMax], 'YLim', [0 yMax], ...
@@ -44,14 +50,16 @@ function MouseChaseDemo()
     theta = linspace(0, 2*pi, 20); % Points around the ellipse
     
     % Assign callbacks to capture screen touches and drags
-    fig.WindowButtonDownFcn = @(~, ~) updateFinger(ax);
-    fig.WindowButtonMotionFcn = @(~, ~) updateFinger(ax);
+    fig.WindowButtonDownFcn = @(src, ev) touchEvent(src, ev, 'down');
+    fig.WindowButtonMotionFcn = @(src, ev) touchEvent(src, ev, 'move');
+    fig.WindowButtonUpFcn = @(src, ev) touchEvent(src, ev, 'up');
+    fig.CloseRequestFcn = @(src, ev) closeFigure(src, ev);
     
     % Draw the bug FIRST so it sits at the bottom of the visual stack
     bugPatch = patch(ax, 'XData', [], 'YData', [], 'FaceColor', 'k', 'EdgeColor', 'none');
     
     % Draw the rock SECOND so it sits on top of the bug and occludes it
-    rockPatch = patch(ax, 'XData', rockX, 'YData', rockY, 'FaceColor', [0.7 0.7 0.7], 'EdgeColor', 'none');
+    patch(ax, 'XData', rockX, 'YData', rockY, 'FaceColor', [0.7 0.7 0.7], 'EdgeColor', 'none');
     
     % Run the animation loop
     tic;
@@ -84,14 +92,57 @@ function MouseChaseDemo()
         drawnow limitrate;
     end
     
-    % --- Nested callback function to update finger coordinates ---
-    function updateFinger(targetAx)
-        cp = targetAx.CurrentPoint;
-        % Constrain coordinates between 0 and the dynamic limits
+    % Save the touch log once when the figure closes or the demo exits
+    function saveTouchLog()
+        if touchLogSaved || isempty(touchLog)
+            return;
+        end
+        touchLogSaved = true;
+        logTable = struct2table(touchLog);
+        logFileName = sprintf('TouchLog_%s.csv', datestr(now,'yyyymmdd_HHMMSS'));
+        try
+            writetable(logTable, logFileName);
+            fprintf('Touch log saved to %s\n', fullfile(pwd, logFileName));
+        catch ME
+            warning(ME.identifier, '%s', ME.message);
+        end
+    end
+
+    function touchEvent(~, ~, eventType)
+        cp = ax.CurrentPoint;
         x = max(0, min(xMax, cp(1,1)));
         y = max(0, min(yMax, cp(1,2)));
         fingerPos = [x, y];
+
+        switch eventType
+            case 'down'
+                isTouchActive = true;
+            case 'up'
+                isTouchActive = false;
+            case 'move'
+                if ~isTouchActive
+                    return;
+                end
+        end
+
+        logTouch(eventType, x, y);
     end
+
+    function logTouch(eventType, x, y)
+        newEntry.Time = toc(startTime);
+        newEntry.X = x;
+        newEntry.Y = y;
+        newEntry.Type = eventType;
+        touchLog(end+1) = newEntry;
+    end
+
+    function closeFigure(src, ~)
+        saveTouchLog();
+        if ishandle(src)
+            delete(src);
+        end
+    end
+
 end % End of MouseChaseDemo
 
 function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY)
