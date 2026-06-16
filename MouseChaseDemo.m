@@ -1,6 +1,12 @@
 function MouseChaseDemo()
     % Main function that runs the whole demo
     
+    % Prompt for the subject name before starting the demo
+    subjectName = askForSubjectName();
+    if isempty(subjectName)
+        return;
+    end
+    
     % Create a gray, full-screen figure
     fig = figure('Name', 'Mouse Chase Demo', ...
         'Color', [0.5 0.5 0.5], ...
@@ -49,10 +55,11 @@ function MouseChaseDemo()
     bugWidth = 0.015; % Semi-minor axis
     theta = linspace(0, 2*pi, 20); % Points around the ellipse
     
-    % Assign callbacks to capture screen touches and drags
+    % Assign callbacks to capture screen touches, drags, and keyboard input
     fig.WindowButtonDownFcn = @(src, ev) touchEvent(src, ev, 'down');
     fig.WindowButtonMotionFcn = @(src, ev) touchEvent(src, ev, 'move');
     fig.WindowButtonUpFcn = @(src, ev) touchEvent(src, ev, 'up');
+    fig.KeyPressFcn = @(src, ev) keyPress(src, ev);
     fig.CloseRequestFcn = @(src, ev) closeFigure(src, ev);
     
     % Draw the bug FIRST so it sits at the bottom of the visual stack
@@ -99,10 +106,24 @@ function MouseChaseDemo()
         end
         touchLogSaved = true;
         logTable = struct2table(touchLog);
-        logFileName = sprintf('TouchLog_%s.csv', datestr(now,'yyyymmdd_HHMMSS'));
+
+        safeSubject = regexprep(subjectName, '[<>:"/\\|?*]', '_');
+        subjectDir = fullfile('C:\LocalExpData', safeSubject);
+        if ~exist(subjectDir, 'dir')
+            mkdir(subjectDir);
+        end
+
+        dateStr = datestr(now, 'yyyy-mm-dd');
+        filePattern = fullfile(subjectDir, sprintf('%s_*_%s_MouseChaseTouchLog.csv', dateStr, safeSubject));
+        existingFiles = dir(filePattern);
+        runIndex = numel(existingFiles) + 1;
+
+        logFileName = sprintf('%s_%d_%s_MouseChaseTouchLog.csv', dateStr, runIndex, safeSubject);
+        logFilePath = fullfile(subjectDir, logFileName);
+
         try
-            writetable(logTable, logFileName);
-            fprintf('Touch log saved to %s\n', fullfile(pwd, logFileName));
+            writetable(logTable, logFilePath);
+            fprintf('Touch log saved to %s\n', logFilePath);
         catch ME
             warning(ME.identifier, '%s', ME.message);
         end
@@ -136,6 +157,12 @@ function MouseChaseDemo()
         touchLog(end+1) = newEntry;
     end
 
+    function keyPress(~, event)
+        if strcmpi(event.Key, 'q')
+            closeFigure(fig, []);
+        end
+    end
+
     function closeFigure(src, ~)
         saveTouchLog();
         if ishandle(src)
@@ -144,6 +171,50 @@ function MouseChaseDemo()
     end
 
 end % End of MouseChaseDemo
+
+function subjectName = askForSubjectName()
+    % askForSubjectName Prompt for a subject name with a modal dialog.
+    subjectName = '';
+    dlg = dialog('Name', 'Enter Subject Name', 'WindowStyle', 'modal', 'Position', [400 400 360 140]);
+    uicontrol('Parent', dlg, 'Style', 'text', 'Position', [20 90 320 30], ...
+        'String', 'Subject:', 'HorizontalAlignment', 'left', 'FontSize', 10);
+    editBox = uicontrol('Parent', dlg, 'Style', 'edit', 'Position', [20 60 320 25], ...
+        'HorizontalAlignment', 'left', 'FontSize', 10, 'BackgroundColor', 'white');
+    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'OK', 'Position', [180 15 70 30], ...
+        'Callback', @onOk);
+    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'Cancel', 'Position', [270 15 70 30], ...
+        'Callback', @onCancel);
+    dlg.KeyPressFcn = @keyPress;
+
+    uiwait(dlg);
+    if ishandle(dlg)
+        delete(dlg);
+    end
+
+    function onOk(~, ~)
+        name = strtrim(editBox.String);
+        if isempty(name)
+            errordlg('Please enter a subject name before starting.', 'Missing Subject', 'modal');
+            return;
+        end
+        subjectName = name;
+        uiresume(dlg);
+    end
+
+    function onCancel(~, ~)
+        subjectName = '';
+        uiresume(dlg);
+    end
+
+    function keyPress(~, event)
+        switch event.Key
+            case {'return', 'enter'}
+                onOk();
+            case 'escape'
+                onCancel();
+        end
+    end
+end
 
 function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY)
     % Moves the bug using non-holonomic kinematics (no sideways skidding)
