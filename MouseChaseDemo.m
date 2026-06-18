@@ -22,7 +22,7 @@ function MouseChaseDemo()
     yMax = 1;
     
     % Store all touches for the running session
-    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'Type', {});
+    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'Type', {}, 'BugX', {}, 'BugY', {});
     startTime = tic;
     touchLogSaved = false;
     isTouchActive = false;
@@ -154,6 +154,8 @@ function MouseChaseDemo()
         newEntry.X = x;
         newEntry.Y = y;
         newEntry.Type = eventType;
+        newEntry.BugX = bugPos(1);
+        newEntry.BugY = bugPos(2);
         touchLog(end+1) = newEntry;
     end
 

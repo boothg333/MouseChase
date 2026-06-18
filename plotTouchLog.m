@@ -34,9 +34,26 @@ function plotTouchLog(logFileName)
         eventType = repmat("touch", height(logTable), 1);
     end
 
+    hasBugPos = all(ismember({'BugX','BugY'}, logTable.Properties.VariableNames));
+    if hasBugPos
+        bugX = logTable.BugX;
+        bugY = logTable.BugY;
+        distanceToBug = sqrt((x - bugX).^2 + (y - bugY).^2);
+    else
+        distanceToBug = nan(height(logTable),1);
+    end
+
+    % Subject movement speed based on touch travel between successive touches
+    speed = nan(height(logTable),1);
+    if numel(time) > 1
+        dt = diff(time);
+        motion = sqrt(diff(x).^2 + diff(y).^2);
+        speed(2:end) = motion ./ dt;
+    end
+
     figure('Name', 'MouseChase Touch Log', 'Color', [1 1 1]);
 
-    subplot(2,1,1);
+    subplot(2,2,1);
     plot(time, x, '-o', 'LineWidth', 1.5, 'MarkerSize', 5, 'DisplayName', 'X');
     hold on;
     plot(time, y, '-s', 'LineWidth', 1.5, 'MarkerSize', 5, 'DisplayName', 'Y');
@@ -47,7 +64,7 @@ function plotTouchLog(logFileName)
     legend('Location', 'best');
     grid on;
 
-    subplot(2,1,2);
+    subplot(2,2,2);
     types = unique(eventType, 'stable');
     colors = lines(numel(types));
     hold on;
@@ -63,4 +80,30 @@ function plotTouchLog(logFileName)
     legend('Location', 'bestoutside');
     grid on;
     ylim([min([x; y]) - 0.05, max([x; y]) + 0.05]);
+
+    subplot(2,2,3);
+    numBins = 40;
+    xEdges = linspace(min(x), max(x), numBins+1);
+    yEdges = linspace(min(y), max(y), numBins+1);
+    heatCounts = histcounts2(x, y, xEdges, yEdges);
+    imagesc(xEdges, yEdges, heatCounts');
+    set(gca, 'YDir', 'normal');
+    colormap hot;
+    colorbar;
+    xlabel('X position');
+    ylabel('Y position');
+    title('Touch position heatmap');
+
+    subplot(2,2,4);
+    if hasBugPos && any(~isnan(speed))
+        scatter(speed, distanceToBug, 40, time, 'filled');
+        colorbar;
+        xlabel('Subject movement speed (units/s)');
+        ylabel('Distance to bug');
+        title('Bug distance vs subject movement speed');
+        grid on;
+    else
+        text(0.1, 0.5, 'Bug position data unavailable', 'FontSize', 12);
+        axis off;
+    end
 end
