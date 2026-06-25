@@ -1,113 +1,160 @@
-function MouseChaseDemo()
-    % Main function that runs the whole demo
-    
-    % Prompt for the subject name before starting the demo
-    subjectName = askForSubjectName();
-    if isempty(subjectName)
-        return;
-    end
-    
-    % Create a gray, full-screen figure
-    fig = figure('Name', 'Mouse Chase Demo', ...
-        'Color', [0.5 0.5 0.5], ...
-        'Units', 'normalized', ...
-        'Position', [0.1 0.1 0.8 0.8], ...
-        'MenuBar', 'none', ...
-        'ToolBar', 'none');
-    
-    % Force MATLAB to draw the figure so we can get its true pixel dimensions
-    drawnow; 
-    figPos = getpixelposition(fig);
-    xMax = figPos(3) / figPos(4);
-    yMax = 1;
-    
-    % Store all touches for the running session
-    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'Type', {}, 'BugX', {}, 'BugY', {});
-    startTime = tic;
-    touchLogSaved = false;
-    isTouchActive = false;
-    
-    % Create axes for drawing and lock the aspect ratio
-    ax = axes(fig, 'Position', [0 0 1 1], ...
-        'XLim', [0 xMax], 'YLim', [0 yMax], ...
-        'Color', [0.5 0.5 0.5], ...
-        'DataAspectRatio', [1 1 1]);
-        
-    % Lock limits manually so the patches don't stretch the screen when out of bounds
-    ax.XLimMode = 'manual';
-    ax.YLimMode = 'manual';
-    axis off;
-    
-    % Define the triangular rock in the middle
-    rockX = [0.4, 0.6, 0.5] * xMax;
-    rockY = [0.4, 0.4, 0.6] * yMax;
-    
-    % Initialize finger and bug state at the center of the arena
-    fingerPos = [xMax/2, yMax/2];
-    prevFingerPos = fingerPos;
-    bugPos = [xMax/2, yMax/2];
-    bugVel = [0, 0];
-    wanderAngle = rand() * 2 * pi;
-    heading = wanderAngle; % Track heading explicitly
-    
-    % Define bug geometry
-    bugLength = 0.04; % Semi-major axis
-    bugWidth = 0.015; % Semi-minor axis
-    theta = linspace(0, 2*pi, 20); % Points around the ellipse
-    
-    % Assign callbacks to capture screen touches, drags, and keyboard input
-    fig.WindowButtonDownFcn = @(src, ev) touchEvent(src, ev, 'down');
-    fig.WindowButtonMotionFcn = @(src, ev) touchEvent(src, ev, 'move');
-    fig.WindowButtonUpFcn = @(src, ev) touchEvent(src, ev, 'up');
-    fig.KeyPressFcn = @(src, ev) keyPress(src, ev);
-    fig.CloseRequestFcn = @(src, ev) closeFigure(src, ev);
-    
-    % Draw the bug FIRST so it sits at the bottom of the visual stack
-    bugPatch = patch(ax, 'XData', [], 'YData', [], 'FaceColor', 'k', 'EdgeColor', 'none');
-    
-    % Draw the rock SECOND so it sits on top of the bug and occludes it
-    patch(ax, 'XData', rockX, 'YData', rockY, 'FaceColor', [0.7 0.7 0.7], 'EdgeColor', 'none');
-    
-    % Run the animation loop
-    tic;
-    while ishandle(fig)
-        dt = toc;
-        tic;
-        
-        % Cap dt to avoid huge jumps if the system lags
-        if dt > 0.1
-            dt = 0.016; 
+﻿function MouseChaseDemo(t, events, params, visStim, inputs, outputs, audio)
+% MouseChaseDemo Rigbox Signals experiment definition
+%   This expDef is designed to run under Rigbox via srv.expServer. It
+%   uses the rig's touchscreen input (`mouseInput`) as a 1D touch proxy,
+%   displays a chasing bug stimulus, and saves a subject-specific touch log file.
+%
+%   Usage:
+%     pars = exp.inferParameters(@MouseChaseDemo);
+%     pars.subjectName = 'subject1';
+%     ref = dat.newExp('test', now, pars);
+%     srv.expServer('expRef', ref)
+
+    % Define required parameters and inputs
+    subjectNameParam = params.subjectName;
+    try
+        touchSignal = inputs.mouseInput.skipRepeats();
+    catch
+        try
+            touchSignal = inputs.wheel.skipRepeats();
+        catch
+            error('MouseChaseDemo:MissingInput', 'No touchscreen or wheel input found in inputs. Expected inputs.mouseInput or inputs.wheel.');
         end
-        
-        % Constantly update xMax in case the window is resized during the demo
-        figPos = getpixelposition(fig);
-        xMax = figPos(3) / figPos(4);
-        ax.XLim = [0 xMax];
-        
-        % Calculate finger speed
-        fingerSpeed = norm(fingerPos - prevFingerPos) / dt;
-        prevFingerPos = fingerPos;
-        
-        % Update physics and behavior
-        [bugPos, bugVel, wanderAngle, heading] = moveBug(bugPos, bugVel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY);
-        
-        % Get rotated coordinates and update the patch
-        [x, y] = getRotatedOval(bugPos, bugLength, bugWidth, heading, theta);
-        bugPatch.XData = x;
-        bugPatch.YData = y;
-        
-        drawnow limitrate;
     end
-    
-    % Save the touch log once when the figure closes or the demo exits
-    function saveTouchLog()
-        if touchLogSaved || isempty(touchLog)
+    quitPressed = inputs.keyboard.map(@isQuitKey);
+
+    % Set the experiment stop signal when 'q' is pressed
+    events.expStop = quitPressed;
+
+    % Visual elements
+    bug = vis.patch(t, 'circle');
+    bug.colour = [0 0 0]';
+    bug.dims = [6 6]';
+    bug.show = true;
+
+    rock = vis.patch(t, 'rectangle');
+    rock.colour = [0.7 0.7 0.7]';
+    rock.dims = [18 6]';
+    rock.azimuth = 0;
+    rock.altitude = -8;
+    rock.show = true;
+
+    finger = vis.patch(t, 'circle');
+    finger.colour = [1 0 0]';
+    finger.dims = [3 3]';
+    finger.show = true;
+
+    visStim.bug = bug;
+    visStim.rock = rock;
+    visStim.finger = finger;
+
+    net = t.Node.Net;
+    bugX = net.origin('bugX');
+    bugY = net.origin('bugY');
+    fingerX = net.origin('fingerX');
+    fingerY = net.origin('fingerY');
+
+    bug.azimuth = bugX;
+    bug.altitude = bugY;
+    finger.azimuth = fingerX;
+    finger.altitude = fingerY;
+
+    bugPos = [0; 0];
+    bugVel = [0; 0];
+    currentTouch = [0; 0];
+    lastTouch = [0; 0];
+    lastTouchTime = 0;
+    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'BugX', {}, 'BugY', {}, 'SubjectSpeed', {});
+    hasSaved = false;
+
+    touchSignal.onValue(@logTouch);
+    events.expStop.onValue(@(~)saveTouchLog());
+    t.onValue(@(~)updateBug());
+    events.expStart.onValue(@(~)assertSubjectName());
+
+    function logTouch(value)
+        if isempty(events.expStart.Node.CurrValue)
             return;
         end
-        touchLogSaved = true;
-        logTable = struct2table(touchLog);
 
-        safeSubject = regexprep(subjectName, '[<>:"/\\|?*]', '_');
+        time = t.Node.CurrValue;
+        touchX = parseTouchValue(value);
+        if isempty(touchX)
+            return;
+        end
+
+        touchX = max(min(touchX, 12), -12);
+        currentTouch = [touchX; 0];
+
+        subjectSpeed = nan;
+        if lastTouchTime > 0
+            dt = time - lastTouchTime;
+            if dt > 0
+                subjectSpeed = norm(currentTouch - lastTouch) / dt;
+            end
+        end
+        lastTouchTime = time;
+        lastTouch = currentTouch;
+
+        newEntry.Time = time;
+        newEntry.X = currentTouch(1);
+        newEntry.Y = currentTouch(2);
+        newEntry.BugX = bugPos(1);
+        newEntry.BugY = bugPos(2);
+        newEntry.SubjectSpeed = subjectSpeed;
+        touchLog(end+1) = newEntry; %#ok<AGROW>
+
+        fingerX.post(currentTouch(1));
+        fingerY.post(currentTouch(2));
+    end
+
+    function updateBug()
+        time = t.Node.CurrValue;
+        persistent lastTime
+        if isempty(lastTime)
+            lastTime = time;
+        end
+
+        dt = time - lastTime;
+        if dt <= 0 || dt > 0.1
+            dt = 0.016;
+        end
+        lastTime = time;
+
+        target = currentTouch;
+        dist = norm(target - bugPos);
+        if dist > 0.1
+            evadeDir = (bugPos - target) / dist;
+            desiredSpeed = min(20, 4 + 20 * exp(-dist));
+            desiredVel = evadeDir * desiredSpeed;
+        else
+            desiredVel = randn(2,1) * 0.5;
+        end
+
+        bugVel = bugVel + (desiredVel - bugVel) * min(1, 8*dt);
+        bugPos = bugPos + bugVel * dt;
+        bugPos = max(min(bugPos, [12; 12]), [-12; -12]);
+
+        bugX.post(bugPos(1));
+        bugY.post(bugPos(2));
+    end
+
+    function saveTouchLog()
+        if hasSaved
+            return;
+        end
+        hasSaved = true;
+
+        if isempty(touchLog)
+            return;
+        end
+
+        subjectName = strtrim(subjectNameParam.Node.CurrValue);
+        if isempty(subjectName)
+            subjectName = 'unknown';
+        end
+
+        safeSubject = regexprep(subjectName, '[<>:\"/\\|?*]', '_');
         subjectDir = fullfile('C:\LocalExpData', safeSubject);
         if ~exist(subjectDir, 'dir')
             mkdir(subjectDir);
@@ -117,197 +164,60 @@ function MouseChaseDemo()
         filePattern = fullfile(subjectDir, sprintf('%s_*_%s_MouseChaseTouchLog.csv', dateStr, safeSubject));
         existingFiles = dir(filePattern);
         runIndex = numel(existingFiles) + 1;
-
         logFileName = sprintf('%s_%d_%s_MouseChaseTouchLog.csv', dateStr, runIndex, safeSubject);
         logFilePath = fullfile(subjectDir, logFileName);
 
         try
-            writetable(logTable, logFilePath);
+            writetable(struct2table(touchLog), logFilePath);
             fprintf('Touch log saved to %s\n', logFilePath);
         catch ME
             warning(ME.identifier, '%s', ME.message);
         end
     end
 
-    function touchEvent(~, ~, eventType)
-        cp = ax.CurrentPoint;
-        x = max(0, min(xMax, cp(1,1)));
-        y = max(0, min(yMax, cp(1,2)));
-        fingerPos = [x, y];
-
-        switch eventType
-            case 'down'
-                isTouchActive = true;
-            case 'up'
-                isTouchActive = false;
-            case 'move'
-                if ~isTouchActive
-                    return;
-                end
-        end
-
-        logTouch(eventType, x, y);
-    end
-
-    function logTouch(eventType, x, y)
-        newEntry.Time = toc(startTime);
-        newEntry.X = x;
-        newEntry.Y = y;
-        newEntry.Type = eventType;
-        newEntry.BugX = bugPos(1);
-        newEntry.BugY = bugPos(2);
-        touchLog(end+1) = newEntry;
-    end
-
-    function keyPress(~, event)
-        if strcmpi(event.Key, 'q')
-            closeFigure(fig, []);
-        end
-    end
-
-    function closeFigure(src, ~)
-        saveTouchLog();
-        if ishandle(src)
-            delete(src);
-        end
-    end
-
-end % End of MouseChaseDemo
-
-function subjectName = askForSubjectName()
-    % askForSubjectName Prompt for a subject name with a modal dialog.
-    subjectName = '';
-    dlg = dialog('Name', 'Enter Subject Name', 'WindowStyle', 'modal', 'Position', [400 400 360 140]);
-    uicontrol('Parent', dlg, 'Style', 'text', 'Position', [20 90 320 30], ...
-        'String', 'Subject:', 'HorizontalAlignment', 'left', 'FontSize', 10);
-    editBox = uicontrol('Parent', dlg, 'Style', 'edit', 'Position', [20 60 320 25], ...
-        'HorizontalAlignment', 'left', 'FontSize', 10, 'BackgroundColor', 'white');
-    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'OK', 'Position', [180 15 70 30], ...
-        'Callback', @onOk);
-    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'Cancel', 'Position', [270 15 70 30], ...
-        'Callback', @onCancel);
-    dlg.KeyPressFcn = @keyPress;
-
-    uiwait(dlg);
-    if ishandle(dlg)
-        delete(dlg);
-    end
-
-    function onOk(~, ~)
-        name = strtrim(editBox.String);
-        if isempty(name)
-            errordlg('Please enter a subject name before starting.', 'Missing Subject', 'modal');
+    function touchX = parseTouchValue(value)
+        touchX = [];
+        if isempty(value)
             return;
         end
-        subjectName = name;
-        uiresume(dlg);
+        if isnumeric(value) && numel(value) >= 1
+            touchX = value(1);
+            return;
+        end
+        if ischar(value) || isstring(value)
+            num = str2double(value);
+            if ~isnan(num)
+                touchX = num;
+                return;
+            end
+        end
+        if iscell(value)
+            for ii = 1:numel(value)
+                touchX = parseTouchValue(value{ii});
+                if ~isempty(touchX)
+                    return;
+                end
+            end
+        end
     end
 
-    function onCancel(~, ~)
-        subjectName = '';
-        uiresume(dlg);
+    function assertSubjectName()
+        subjectName = strtrim(subjectNameParam.Node.CurrValue);
+        assert(~isempty(subjectName), 'MouseChaseDemo:MissingSubjectName', ...
+            'Subject name parameter must be specified before the experiment starts.');
     end
 
-    function keyPress(~, event)
-        switch event.Key
-            case {'return', 'enter'}
-                onOk();
-            case 'escape'
-                onCancel();
+    function tf = isQuitKey(keyValue)
+        tf = false;
+        if isempty(keyValue)
+            return;
+        end
+        if ischar(keyValue) || isstring(keyValue)
+            tf = any(lower(string(keyValue)) == 'q');
+            return;
+        end
+        if iscell(keyValue)
+            tf = any(cellfun(@(v) isQuitKey(v), keyValue));
         end
     end
 end
-
-function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY)
-    % Moves the bug using non-holonomic kinematics (no sideways skidding)
-    
-    % Check if bug is hidden (under rock or in crevice)
-    isUnderRock = inpolygon(pos(1), pos(2), rockX, rockY);
-    isOffScreen = pos(1) < 0 || pos(1) > xMax || pos(2) < 0 || pos(2) > yMax;
-    isHidden = isUnderRock || isOffScreen;
-    
-    visualRange = 0.7; 
-    motionThreshold = 0.15; 
-    dist = norm(fingerPos - pos);
-    
-    % Evade only if visible and threatened
-    isEvading = ~isHidden && (dist < visualRange) && (dist > 0) && (fingerSpeed > motionThreshold);
-    
-    if isEvading
-        % Evade!
-        direction = (pos - fingerPos) / dist;
-        desiredHeading = atan2(direction(2), direction(1));
-        thrust = (visualRange - dist) * 35; % Scale up as it gets closer
-        thrust = min(thrust, 20); % Cap maximum acceleration
-        newWanderAngle = desiredHeading; % Keep wander angle synced
-    else
-        % Wander!
-        newWanderAngle = wanderAngle + randn() * 3 * dt; % Slowly drift the desired heading
-        desiredHeading = newWanderAngle;
-        thrust = 0.8; % Steady, slow forward walk
-    end
-    
-    % Update the heading smoothly toward the desired heading
-    deltaAngle = mod(desiredHeading - heading + pi, 2*pi) - pi;
-    maxTurnRate = 8; % Radians per second
-    turnStep = sign(deltaAngle) * min(abs(deltaAngle), maxTurnRate * dt);
-    newHeading = heading + turnStep;
-    
-    % Apply thrust strictly in the direction the bug is facing
-    headingVec = [cos(newHeading), sin(newHeading)];
-    appliedForce = headingVec * thrust;
-    
-    % Apply physics (friction and integration)
-    friction = 6;
-    newVel = vel + appliedForce * dt - friction * vel * dt;
-    
-    % Eliminate lateral skidding by projecting velocity onto the heading axis
-    forwardSpeed = max(0, dot(newVel, headingVec)); 
-    newVel = forwardSpeed * headingVec;
-    
-    newPos = pos + newVel * dt;
-    
-    % Constrain bug to an invisible outer bounding box to mimic deep wall crevices
-    outerPad = 0.15; 
-    hitOuterWall = false;
-    
-    if newPos(1) < -outerPad
-        newPos(1) = -outerPad; hitOuterWall = true;
-    elseif newPos(1) > xMax + outerPad
-        newPos(1) = xMax + outerPad; hitOuterWall = true;
-    end
-    
-    if newPos(2) < -outerPad
-        newPos(2) = -outerPad; hitOuterWall = true;
-    elseif newPos(2) > yMax + outerPad
-        newPos(2) = yMax + outerPad; hitOuterWall = true;
-    end
-    
-    if hitOuterWall
-        % Bug has hit the absolute limit inside the crevice, force it to turn around
-        centerDir = [xMax/2, yMax/2] - newPos;
-        newWanderAngle = atan2(centerDir(2), centerDir(1));
-        
-        % Kill momentum to force a realistic turning animation inside the wall
-        newVel = [0, 0];
-    end
-end % End of moveBug
-
-function [x, y] = getRotatedOval(center, len, wid, heading, theta)
-    % Calculates the coordinates of a rotated ellipse
-    
-    % Base unrotated coordinates
-    xb = len * cos(theta);
-    yb = wid * sin(theta);
-    
-    % Rotation matrix
-    R = [cos(heading), -sin(heading); 
-         sin(heading),  cos(heading)];
-     
-    % Apply rotation
-    coords = R * [xb; yb];
-    
-    % Translate to the bug's center position
-    x = coords(1, :) + center(1);
-    y = coords(2, :) + center(2);
-end % End of getRotatedOval
