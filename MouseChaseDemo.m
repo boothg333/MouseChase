@@ -92,7 +92,12 @@
         prevFingerPos = fingerPos;
         
         % Update physics and behavior
-        [bugPos, bugVel, wanderAngle, heading] = moveBug(bugPos, bugVel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY);
+        originalUnits = fig.Units;
+        fig.Units = 'centimeters';
+        figHeightCm = fig.Position(4);
+        fig.Units = originalUnits;
+        outerPad = 2 / figHeightCm; % 2 cm expressed in y-axis data units
+        [bugPos, bugVel, wanderAngle, heading] = moveBug(bugPos, bugVel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY, outerPad);
         
         % Get rotated coordinates and update the patch
         [x, y] = getRotatedOval(bugPos, bugLength, bugWidth, heading, theta);
@@ -221,7 +226,7 @@ function subjectName = askForSubjectName()
     end
 end
 
-function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY)
+function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY, outerPad)
     % Moves the bug using non-holonomic kinematics (no sideways skidding)
     
     % Check if bug is hidden (under rock or in crevice)
@@ -229,30 +234,30 @@ function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, finger
     isOffScreen = pos(1) < 0 || pos(1) > xMax || pos(2) < 0 || pos(2) > yMax;
     isHidden = isUnderRock || isOffScreen;
     
-    visualRange = 0.7; 
-    motionThreshold = 0.15; 
+    visualRange = 0.5; 
+    motionThreshold = 0.25; 
     dist = norm(fingerPos - pos);
     
     % Evade only if visible and threatened
     isEvading = ~isHidden && (dist < visualRange) && (dist > 0) && (fingerSpeed > motionThreshold);
     
     if isEvading
-        % Evade!
+        % Evade gently rather than sprinting away
         direction = (pos - fingerPos) / dist;
         desiredHeading = atan2(direction(2), direction(1));
-        thrust = (visualRange - dist) * 35; % Scale up as it gets closer
-        thrust = min(thrust, 20); % Cap maximum acceleration
+        thrust = (visualRange - dist) * 12; % Lower acceleration when threatened
+        thrust = min(thrust, 6); % Cap maximum acceleration
         newWanderAngle = desiredHeading; % Keep wander angle synced
     else
-        % Wander!
-        newWanderAngle = wanderAngle + randn() * 3 * dt; % Slowly drift the desired heading
+        % Wander slowly
+        newWanderAngle = wanderAngle + randn() * 2 * dt; % Slower drift
         desiredHeading = newWanderAngle;
-        thrust = 0.8; % Steady, slow forward walk
+        thrust = 0.4; % Slower, steady forward walk
     end
     
     % Update the heading smoothly toward the desired heading
     deltaAngle = mod(desiredHeading - heading + pi, 2*pi) - pi;
-    maxTurnRate = 8; % Radians per second
+    maxTurnRate = 6; % Radians per second
     turnStep = sign(deltaAngle) * min(abs(deltaAngle), maxTurnRate * dt);
     newHeading = heading + turnStep;
     
@@ -266,12 +271,12 @@ function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, finger
     
     % Eliminate lateral skidding by projecting velocity onto the heading axis
     forwardSpeed = max(0, dot(newVel, headingVec)); 
-    newVel = forwardSpeed * headingVec;
+    maxSpeed = 1.2;
+    newVel = min(forwardSpeed, maxSpeed) * headingVec;
     
     newPos = pos + newVel * dt;
     
     % Constrain bug to an invisible outer bounding box to mimic deep wall crevices
-    outerPad = 0.15; 
     hitOuterWall = false;
     
     if newPos(1) < -outerPad
@@ -287,12 +292,13 @@ function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, finger
     end
     
     if hitOuterWall
-        % Bug has hit the absolute limit inside the crevice, force it to turn around
+        % Bug has hit the crevice boundary and will head back toward screen center
         centerDir = [xMax/2, yMax/2] - newPos;
-        newWanderAngle = atan2(centerDir(2), centerDir(1));
-        
-        % Kill momentum to force a realistic turning animation inside the wall
-        newVel = [0, 0];
+        returnHeading = atan2(centerDir(2), centerDir(1));
+        newWanderAngle = returnHeading;
+        newHeading = returnHeading;
+        returnSpeed = min(maxSpeed, max(forwardSpeed, 0.4));
+        newVel = returnSpeed * [cos(newHeading), sin(newHeading)];
     end
 end % End of moveBug
 
