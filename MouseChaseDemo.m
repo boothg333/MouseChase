@@ -1,4 +1,4 @@
-function MouseChaseDemo()
+﻿function MouseChaseDemo()
     % Main function that runs the whole demo
     
     % Prompt for the subject name before starting the demo
@@ -7,9 +7,9 @@ function MouseChaseDemo()
         return;
     end
     
-    % Create a gray, full-screen figure
+    % Create a white, full-screen figure for high contrast
     fig = figure('Name', 'Mouse Chase Demo', ...
-        'Color', [0.5 0.5 0.5], ...
+        'Color', [1 1 1], ...
         'Units', 'normalized', ...
         'Position', [0.1 0.1 0.8 0.8], ...
         'MenuBar', 'none', ...
@@ -30,7 +30,7 @@ function MouseChaseDemo()
     % Create axes for drawing and lock the aspect ratio
     ax = axes(fig, 'Position', [0 0 1 1], ...
         'XLim', [0 xMax], 'YLim', [0 yMax], ...
-        'Color', [0.5 0.5 0.5], ...
+        'Color', [1 1 1], ...
         'DataAspectRatio', [1 1 1]);
         
     % Lock limits manually so the patches don't stretch the screen when out of bounds
@@ -50,9 +50,12 @@ function MouseChaseDemo()
     wanderAngle = rand() * 2 * pi;
     heading = wanderAngle; % Track heading explicitly
     
-    % Define bug geometry
-    bugLength = 0.04; % Semi-major axis
-    bugWidth = 0.015; % Semi-minor axis
+    % Define bug geometry at a target physical size of 0.5 cm diameter
+    screenPPI = get(0, 'ScreenPixelsPerInch');
+    bugDiameterCm = 0.5;
+    bugRadius = (bugDiameterCm / 2) * screenPPI / 2.54 / figPos(4);
+    bugLength = bugRadius; % Semi-major axis (circular bug)
+    bugWidth = bugRadius;  % Semi-minor axis
     theta = linspace(0, 2*pi, 20); % Points around the ellipse
     
     % Assign callbacks to capture screen touches, drags, and keyboard input
