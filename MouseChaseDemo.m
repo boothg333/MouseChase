@@ -1,322 +1,210 @@
-﻿function MouseChaseDemo()
-    % Main function that runs the whole demo
-    
-    % Prompt for the subject name before starting the demo
-    subjectName = askForSubjectName();
-    if isempty(subjectName)
-        return;
-    end
-    
-    % Create a white, full-screen figure for high contrast
-    fig = figure('Name', 'Mouse Chase Demo', ...
-        'Color', [1 1 1], ...
-        'Units', 'normalized', ...
-        'Position', [0.1 0.1 0.8 0.8], ...
-        'MenuBar', 'none', ...
-        'ToolBar', 'none');
-    
-    % Force MATLAB to draw the figure so we can get its true pixel dimensions
-    drawnow; 
-    figPos = getpixelposition(fig);
-    xMax = figPos(3) / figPos(4);
-    yMax = 1;
-    
-    % Store all touches for the running session
-    touchLog = struct('Time', {}, 'X', {}, 'Y', {}, 'Type', {}, 'BugX', {}, 'BugY', {});
-    startTime = tic;
-    touchLogSaved = false;
-    isTouchActive = false;
-    
-    % Create axes for drawing and lock the aspect ratio
-    ax = axes(fig, 'Position', [0 0 1 1], ...
-        'XLim', [0 xMax], 'YLim', [0 yMax], ...
-        'Color', [1 1 1], ...
-        'DataAspectRatio', [1 1 1]);
-        
-    % Lock limits manually so the patches don't stretch the screen when out of bounds
-    ax.XLimMode = 'manual';
-    ax.YLimMode = 'manual';
-    axis off;
-    
-    % Define the triangular rock in the middle
-    rockX = [0.4, 0.6, 0.5] * xMax;
-    rockY = [0.4, 0.4, 0.6] * yMax;
-    
-    % Initialize finger and bug state at the center of the arena
-    fingerPos = [xMax/2, yMax/2];
-    prevFingerPos = fingerPos;
-    bugPos = [xMax/2, yMax/2];
-    bugVel = [0, 0];
-    wanderAngle = rand() * 2 * pi;
-    heading = wanderAngle; % Track heading explicitly
-    
-    % Define bug geometry at a target physical size of 0.5 cm diameter
-    screenPPI = get(0, 'ScreenPixelsPerInch');
-    bugDiameterCm = 0.5;
-    bugRadius = (bugDiameterCm / 2) * screenPPI / 2.54 / figPos(4);
-    bugLength = bugRadius; % Semi-major axis (circular bug)
-    bugWidth = bugRadius;  % Semi-minor axis
-    theta = linspace(0, 2*pi, 20); % Points around the ellipse
-    
-    % Assign callbacks to capture screen touches, drags, and keyboard input
-    fig.WindowButtonDownFcn = @(src, ev) touchEvent(src, ev, 'down');
-    fig.WindowButtonMotionFcn = @(src, ev) touchEvent(src, ev, 'move');
-    fig.WindowButtonUpFcn = @(src, ev) touchEvent(src, ev, 'up');
-    fig.KeyPressFcn = @(src, ev) keyPress(src, ev);
-    fig.CloseRequestFcn = @(src, ev) closeFigure(src, ev);
-    
-    % Draw the bug FIRST so it sits at the bottom of the visual stack
-    bugPatch = patch(ax, 'XData', [], 'YData', [], 'FaceColor', 'k', 'EdgeColor', 'none');
-    
-    % Draw the rock SECOND so it sits on top of the bug and occludes it
-    patch(ax, 'XData', rockX, 'YData', rockY, 'FaceColor', [0.7 0.7 0.7], 'EdgeColor', 'none');
-    
-    % Run the animation loop
-    tic;
-    while ishandle(fig)
-        dt = toc;
-        tic;
-        
-        % Cap dt to avoid huge jumps if the system lags
-        if dt > 0.1
-            dt = 0.016; 
-        end
-        
-        % Constantly update xMax in case the window is resized during the demo
-        figPos = getpixelposition(fig);
-        xMax = figPos(3) / figPos(4);
-        ax.XLim = [0 xMax];
-        
-        % Calculate finger speed
-        fingerSpeed = norm(fingerPos - prevFingerPos) / dt;
-        prevFingerPos = fingerPos;
-        
-        % Update physics and behavior
-        originalUnits = fig.Units;
-        fig.Units = 'centimeters';
-        figHeightCm = fig.Position(4);
-        fig.Units = originalUnits;
-        outerPad = 2 / figHeightCm; % 2 cm expressed in y-axis data units
-        [bugPos, bugVel, wanderAngle, heading] = moveBug(bugPos, bugVel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY, outerPad);
-        
-        % Get rotated coordinates and update the patch
-        [x, y] = getRotatedOval(bugPos, bugLength, bugWidth, heading, theta);
-        bugPatch.XData = x;
-        bugPatch.YData = y;
-        
-        drawnow limitrate;
-    end
-    
-    % Save the touch log once when the figure closes or the demo exits
-    function saveTouchLog()
-        if touchLogSaved || isempty(touchLog)
-            return;
-        end
-        touchLogSaved = true;
-        logTable = struct2table(touchLog);
+function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~)
+%MOUSECHASEDEMO Signals experiment definition for the Mouse Chase task.
+%   The subject controls the cursor and attempts to catch a wandering bug.
+%   Cursor position is sampled from the mouse signal, while the bug state is
+%   advanced by a Signals scan at a fixed update rate.
 
-        safeSubject = regexprep(subjectName, '[<>:"/\\|?*]', '_');
-        subjectDir = fullfile('C:\LocalExpData', safeSubject);
-        if ~exist(subjectDir, 'dir')
-            mkdir(subjectDir);
-        end
+%% Experiment and arena constants
+updateTime = 0.03;
+arenaSz = [180 105];
+arenaColor = [1 1 1];
+rockCenter = [0 0];
+rockSz = [36 21];
+outerPad = 4;
 
-        dateStr = datestr(now, 'yyyy-mm-dd');
-        filePattern = fullfile(subjectDir, sprintf('%s_*_%s_MouseChaseTouchLog.csv', dateStr, safeSubject));
-        existingFiles = dir(filePattern);
-        runIndex = numel(existingFiles) + 1;
+targetCatches = p.targetCatches;
+bugColor = p.bugColor;
+rockColor = p.rockColor;
+catchRadius = p.catchRadius;
 
-        logFileName = sprintf('%s_%d_%s_MouseChaseTouchLog.csv', dateStr, runIndex, safeSubject);
-        logFilePath = fullfile(subjectDir, logFileName);
+% inputs.wheel is the mouse-linked input in the Signals experiment setup.
+% Its value is not used as a wheel displacement: each update prompts a fresh
+% cursor-position sample, allowing the cursor to act as a two-dimensional
+% behavioural input.
+mouse = inputs.wheel;
+cursor = mouse.map(@(~) getCursorPosition(arenaSz));
+tUpdate = skipRepeats(t - mod(t, updateTime));
+cursorAtUpdate = cursor.at(tUpdate);
 
-        try
-            writetable(logTable, logFilePath);
-            fprintf('Touch log saved to %s\n', logFilePath);
-        catch ME
-            warning(ME.identifier, '%s', ME.message);
-        end
-    end
+%% World state
+gameDataInit = struct;
+gameDataInit.bugPos = [0 0];
+gameDataInit.bugVel = [0 0];
+gameDataInit.wanderAngle = rand() * 2 * pi;
+gameDataInit.heading = gameDataInit.wanderAngle;
+gameDataInit.cursorPos = [0 0];
+gameDataInit.distanceToBug = inf;
+gameDataInit.arenaSz = arenaSz;
+gameDataInit.rockCenter = rockCenter;
+gameDataInit.rockSz = rockSz;
+gameDataInit.outerPad = outerPad;
 
-    function touchEvent(~, ~, eventType)
-        cp = ax.CurrentPoint;
-        x = max(0, min(xMax, cp(1,1)));
-        y = max(0, min(yMax, cp(1,2)));
-        fingerPos = [x, y];
+gameData = cursorAtUpdate.scan(@updateGame, gameDataInit).subscriptable;
 
-        switch eventType
-            case 'down'
-                isTouchActive = true;
-            case 'up'
-                isTouchActive = false;
-            case 'move'
-                if ~isTouchActive
-                    return;
-                end
-        end
+  function gameData = updateGame(gameData, cursorPos)
+    cursorSpeed = norm(cursorPos - gameData.cursorPos) / updateTime;
+    [gameData.bugPos, gameData.bugVel, gameData.wanderAngle, ...
+      gameData.heading] = moveBug(...
+      gameData.bugPos, gameData.bugVel, cursorPos, cursorSpeed, ...
+      gameData.wanderAngle, gameData.heading, updateTime, ...
+      gameData.arenaSz, gameData.rockCenter, gameData.rockSz, ...
+      gameData.outerPad);
+    gameData.cursorPos = cursorPos;
+    gameData.distanceToBug = norm(cursorPos - gameData.bugPos);
+  end
 
-        logTouch(eventType, x, y);
-    end
+bugX = gameData.bugPos(1);
+bugY = gameData.bugPos(2);
+bugHeading = gameData.heading;
+cursorX = gameData.cursorPos(1);
+cursorY = gameData.cursorPos(2);
+distanceToBug = gameData.distanceToBug;
 
-    function logTouch(eventType, x, y)
-        newEntry.Time = toc(startTime);
-        newEntry.X = x;
-        newEntry.Y = y;
-        newEntry.Type = eventType;
-        newEntry.BugX = bugPos(1);
-        newEntry.BugY = bugPos(2);
-        touchLog(end+1) = newEntry;
-    end
+% A catch is armed once per trial, after a short grace period, and fires only
+% when the cursor enters the catch radius. The Signals runner then advances
+% to the next trial.
+caught = distanceToBug <= catchRadius;
+catchArm = events.newTrial.delay(1);
+catchEvent = catchArm.setTrigger(caught);
+events.endTrial = catchEvent;
 
-    function keyPress(~, event)
-        if strcmpi(event.Key, 'q')
-            closeFigure(fig, []);
-        end
-    end
+catchCount = catchEvent.scan(@plus, 0);
+events.catch = catchEvent;
+events.catchCount = catchCount;
+events.cursorX = cursorX;
+events.cursorY = cursorY;
+events.bugX = bugX;
+events.bugY = bugY;
+events.distanceToBug = distanceToBug;
+outputs.catch = catchEvent.then(1);
 
-    function closeFigure(src, ~)
-        saveTouchLog();
-        if ishandle(src)
-            delete(src);
-        end
-    end
+endGame = catchCount >= targetCatches;
+events.expStop = endGame.then(1);
 
-end % End of MouseChaseDemo
+%% Visual stimuli
+arena = vis.patch(t, 'rectangle');
+arena.dims = arenaSz;
+arena.azimuth = 0;
+arena.altitude = 0;
+arena.colour = arenaColor;
+arena.show = true;
 
-function subjectName = askForSubjectName()
-    % askForSubjectName Prompt for a subject name with a modal dialog.
-    subjectName = '';
-    dlg = dialog('Name', 'Enter Subject Name', 'WindowStyle', 'modal', 'Position', [400 400 360 140]);
-    uicontrol('Parent', dlg, 'Style', 'text', 'Position', [20 90 320 30], ...
-        'String', 'Subject:', 'HorizontalAlignment', 'left', 'FontSize', 10);
-    editBox = uicontrol('Parent', dlg, 'Style', 'edit', 'Position', [20 60 320 25], ...
-        'HorizontalAlignment', 'left', 'FontSize', 10, 'BackgroundColor', 'white');
-    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'OK', 'Position', [180 15 70 30], ...
-        'Callback', @onOk);
-    uicontrol('Parent', dlg, 'Style', 'pushbutton', 'String', 'Cancel', 'Position', [270 15 70 30], ...
-        'Callback', @onCancel);
-    dlg.KeyPressFcn = @keyPress;
+rock = vis.patch(t, 'rectangle');
+rock.dims = rockSz;
+rock.azimuth = rockCenter(1);
+rock.altitude = rockCenter(2);
+rock.colour = rockColor;
+rock.show = true;
 
-    uiwait(dlg);
-    if ishandle(dlg)
-        delete(dlg);
-    end
+bug = vis.patch(t, 'circle');
+bug.dims = [p.bugDiameter p.bugDiameter];
+bug.azimuth = bugX;
+bug.altitude = bugY;
+bug.orientation = rad2deg(bugHeading);
+bug.colour = bugColor;
+bug.show = true;
 
-    function onOk(~, ~)
-        name = strtrim(editBox.String);
-        if isempty(name)
-            errordlg('Please enter a subject name before starting.', 'Missing Subject', 'modal');
-            return;
-        end
-        subjectName = name;
-        uiresume(dlg);
-    end
+% The cursor is represented by a small cross so the subject can see the
+% position used by the task, without relying on the operating-system cursor.
+cursorStim = vis.patch(t, 'cross');
+cursorStim.dims = [2 2];
+cursorStim.azimuth = cursorX;
+cursorStim.altitude = cursorY;
+cursorStim.colour = [0 0 1];
+cursorStim.show = true;
 
-    function onCancel(~, ~)
-        subjectName = '';
-        uiresume(dlg);
-    end
+visStim.arena = arena;
+visStim.rock = rock;
+visStim.bug = bug;
+visStim.cursor = cursorStim;
 
-    function keyPress(~, event)
-        switch event.Key
-            case {'return', 'enter'}
-                onOk();
-            case 'escape'
-                onCancel();
-        end
-    end
+%% Experimenter parameters
+try
+  p.targetCatches = 5;
+  p.bugColor = [0 0 0]';
+  p.rockColor = [0.7 0.7 0.7]';
+  p.catchRadius = 3;
+  p.bugDiameter = 2;
+catch
 end
 
-function [newPos, newVel, newWanderAngle, newHeading] = moveBug(pos, vel, fingerPos, fingerSpeed, wanderAngle, heading, dt, xMax, yMax, rockX, rockY, outerPad)
-    % Moves the bug using non-holonomic kinematics (no sideways skidding)
-    
-    % Check if bug is hidden (under rock or in crevice)
-    isUnderRock = inpolygon(pos(1), pos(2), rockX, rockY);
-    isOffScreen = pos(1) < 0 || pos(1) > xMax || pos(2) < 0 || pos(2) > yMax;
-    isHidden = isUnderRock || isOffScreen;
-    
-    visualRange = 0.5; 
-    motionThreshold = 0.25; 
-    dist = norm(fingerPos - pos);
-    
-    % Evade only if visible and threatened
-    isEvading = ~isHidden && (dist < visualRange) && (dist > 0) && (fingerSpeed > motionThreshold);
-    
-    if isEvading
-        % Evade gently rather than sprinting away
-        direction = (pos - fingerPos) / dist;
-        desiredHeading = atan2(direction(2), direction(1));
-        thrust = (visualRange - dist) * 12; % Lower acceleration when threatened
-        thrust = min(thrust, 6); % Cap maximum acceleration
-        newWanderAngle = desiredHeading; % Keep wander angle synced
-    else
-        % Wander slowly
-        newWanderAngle = wanderAngle + randn() * 2 * dt; % Slower drift
-        desiredHeading = newWanderAngle;
-        thrust = 0.4; % Slower, steady forward walk
-    end
-    
-    % Update the heading smoothly toward the desired heading
-    deltaAngle = mod(desiredHeading - heading + pi, 2*pi) - pi;
-    maxTurnRate = 6; % Radians per second
-    turnStep = sign(deltaAngle) * min(abs(deltaAngle), maxTurnRate * dt);
-    newHeading = heading + turnStep;
-    
-    % Apply thrust strictly in the direction the bug is facing
-    headingVec = [cos(newHeading), sin(newHeading)];
-    appliedForce = headingVec * thrust;
-    
-    % Apply physics (friction and integration)
-    friction = 6;
-    newVel = vel + appliedForce * dt - friction * vel * dt;
-    
-    % Eliminate lateral skidding by projecting velocity onto the heading axis
-    forwardSpeed = max(0, dot(newVel, headingVec)); 
-    maxSpeed = 1.2;
-    newVel = min(forwardSpeed, maxSpeed) * headingVec;
-    
-    newPos = pos + newVel * dt;
-    
-    % Constrain bug to an invisible outer bounding box to mimic deep wall crevices
-    hitOuterWall = false;
-    
-    if newPos(1) < -outerPad
-        newPos(1) = -outerPad; hitOuterWall = true;
-    elseif newPos(1) > xMax + outerPad
-        newPos(1) = xMax + outerPad; hitOuterWall = true;
-    end
-    
-    if newPos(2) < -outerPad
-        newPos(2) = -outerPad; hitOuterWall = true;
-    elseif newPos(2) > yMax + outerPad
-        newPos(2) = yMax + outerPad; hitOuterWall = true;
-    end
-    
-    if hitOuterWall
-        % Bug has hit the crevice boundary and will head back toward screen center
-        centerDir = [xMax/2, yMax/2] - newPos;
-        returnHeading = atan2(centerDir(2), centerDir(1));
-        newWanderAngle = returnHeading;
-        newHeading = returnHeading;
-        returnSpeed = min(maxSpeed, max(forwardSpeed, 0.4));
-        newVel = returnSpeed * [cos(newHeading), sin(newHeading)];
-    end
-end % End of moveBug
+  function pos = getCursorPosition(arenaSize)
+    screens = Screen('Screens');
+    [screenWidth, screenHeight] = Screen('WindowSize', max(screens));
+    [pixelX, pixelY] = GetMouse();
+    pos = [pixelX / screenWidth * arenaSize(1) - arenaSize(1) / 2,...
+      arenaSize(2) / 2 - pixelY / screenHeight * arenaSize(2)];
+  end
 
-function [x, y] = getRotatedOval(center, len, wid, heading, theta)
-    % Calculates the coordinates of a rotated ellipse
-    
-    % Base unrotated coordinates
-    xb = len * cos(theta);
-    yb = wid * sin(theta);
-    
-    % Rotation matrix
-    R = [cos(heading), -sin(heading); 
-         sin(heading),  cos(heading)];
-     
-    % Apply rotation
-    coords = R * [xb; yb];
-    
-    % Translate to the bug's center position
-    x = coords(1, :) + center(1);
-    y = coords(2, :) + center(2);
-end % End of getRotatedOval
+end
+
+function [newPos, newVel, newWanderAngle, newHeading] = moveBug(...
+    pos, vel, cursorPos, cursorSpeed, wanderAngle, heading, dt, ...
+    arenaSz, rockCenter, rockSz, outerPad)
+%MOVEBUG Advance the bug using non-holonomic kinematics.
+
+isUnderRock = isInsideRectangle(pos, rockCenter, rockSz);
+isOffScreen = pos(1) < -arenaSz(1) / 2 || ...
+    pos(1) > arenaSz(1) / 2 || pos(2) < -arenaSz(2) / 2 || ...
+    pos(2) > arenaSz(2) / 2;
+isHidden = isUnderRock || isOffScreen;
+
+visualRange = 0.5;
+motionThreshold = 0.25;
+dist = norm(cursorPos - pos);
+isEvading = ~isHidden && dist < visualRange && dist > 0 && ...
+    cursorSpeed > motionThreshold;
+
+if isEvading
+  direction = (pos - cursorPos) / dist;
+  desiredHeading = atan2(direction(2), direction(1));
+  thrust = min((visualRange - dist) * 12, 6);
+  newWanderAngle = desiredHeading;
+else
+  newWanderAngle = wanderAngle + randn() * 2 * dt;
+  desiredHeading = newWanderAngle;
+  thrust = 0.4;
+end
+
+deltaAngle = mod(desiredHeading - heading + pi, 2 * pi) - pi;
+maxTurnRate = 6;
+turnStep = sign(deltaAngle) * min(abs(deltaAngle), maxTurnRate * dt);
+newHeading = heading + turnStep;
+
+headingVec = [cos(newHeading), sin(newHeading)];
+newVel = vel + headingVec * thrust * dt - 6 * vel * dt;
+forwardSpeed = max(0, dot(newVel, headingVec));
+maxSpeed = 1.2;
+newVel = min(forwardSpeed, maxSpeed) * headingVec;
+newPos = pos + newVel * dt;
+
+hitOuterWall = false;
+if newPos(1) < -arenaSz(1) / 2 - outerPad
+  newPos(1) = -arenaSz(1) / 2 - outerPad;
+  hitOuterWall = true;
+elseif newPos(1) > arenaSz(1) / 2 + outerPad
+  newPos(1) = arenaSz(1) / 2 + outerPad;
+  hitOuterWall = true;
+end
+if newPos(2) < -arenaSz(2) / 2 - outerPad
+  newPos(2) = -arenaSz(2) / 2 - outerPad;
+  hitOuterWall = true;
+elseif newPos(2) > arenaSz(2) / 2 + outerPad
+  newPos(2) = arenaSz(2) / 2 + outerPad;
+  hitOuterWall = true;
+end
+
+if hitOuterWall
+  centerDir = -newPos;
+  returnHeading = atan2(centerDir(2), centerDir(1));
+  newWanderAngle = returnHeading;
+  newHeading = returnHeading;
+  returnSpeed = min(maxSpeed, max(forwardSpeed, 0.4));
+  newVel = returnSpeed * [cos(newHeading), sin(newHeading)];
+end
+end
+
+function inside = isInsideRectangle(pos, center, dims)
+inside = abs(pos(1) - center(1)) <= dims(1) / 2 && ...
+    abs(pos(2) - center(2)) <= dims(2) / 2;
+end
