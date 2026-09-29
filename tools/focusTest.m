@@ -1,15 +1,18 @@
-function focusTest()
-%FOCUSTEST Find which start-up step pushes the stimulus window behind MATLAB.
-%   Opens a full-screen window like srv.expServer, then performs, 4 s apart,
-%   the steps an experiment start involves. The current step is written on
-%   screen; note after which step MATLAB comes to the front.
+function focusTest(useKeyboardQueue)
+%FOCUSTEST Find out what happens to the stimulus window when touch starts.
+%   FOCUSTEST opens a full-screen window like srv.expServer, then 4 s apart:
 %     1  plain window
 %     2  keyboard queue started (as Rigbox does at every experiment start)
-%     3  dat.paths read (as MouseChaseDemo does to find hardware.mat)
-%     4  touch queue created and started on the window (MouseChaseDemo)
+%     3  touch queue created and started on the window (MouseChaseDemo)
+%     4  asks Windows about the window, then tries to bring it back
+%        (restore, topmost, focus) with raiseStimWindow.ps1
+%   The step is written on screen and printed with the window's state.
+%   FOCUSTEST(false) skips step 2, to see if the keyboard queue matters.
 %   Run on POPPY-STIM after switchPsychtoolbox, with srv.expServer closed.
 
-steps = {'1: plain window', '2: keyboard queue', '3: dat.paths', '4: touch queue'};
+if nargin < 1; useKeyboardQueue = true; end
+steps = {'1: plain window', '2: keyboard queue', '3: touch queue', '4: bring back'};
+raiseScript = fullfile(fileparts(mfilename('fullpath')), 'raiseStimWindow.ps1');
 dev = [];
 try
   % Timing self-tests can fail on this PC (desktop compositor) and would
@@ -20,15 +23,19 @@ try
   for k = 1:numel(steps)
     switch k
       case 2
+        if ~useKeyboardQueue; continue; end
         KbQueueCreate();
         KbQueueStart();
       case 3
-        dat.paths;
-      case 4
         dev = GetTouchDeviceIndices();
         dev = dev(1);
         TouchQueueCreate(win, dev);
         TouchQueueStart(dev);
+        pause(0.5);
+        fprintf('%s  window state after touch queue:\n', datestr(now, 'HH:MM:SS'));
+        runRaise('-ReportOnly');
+      case 4
+        runRaise('');
     end
     fprintf('%s  step %s done\n', datestr(now, 'HH:MM:SS'), steps{k});
     tEnd = GetSecs + 4;
@@ -45,4 +52,12 @@ if ~isempty(dev)
 end
 try KbQueueRelease(); catch; end
 sca;
+
+  function runRaise(opt)
+    % builtin: a mock system.m may shadow the real one on the rig
+    [~, out] = builtin('system', sprintf( ...
+      'powershell -NoProfile -ExecutionPolicy Bypass -File "%s" -ProcessId %d %s', ...
+      raiseScript, feature('getpid'), opt));
+    fprintf('%s', out);
+  end
 end
