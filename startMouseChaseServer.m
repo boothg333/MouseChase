@@ -9,7 +9,7 @@
 %   MATLAB and start srv.expServer the usual way.
 
 ptb318Root = 'C:\toolbox\Psychtoolbox';
-addpath(fullfile(fileparts(mfilename('fullpath')), 'tools'));
+addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'tools')));
 if startsWith(lower(PsychtoolboxRoot), lower(ptb318Root))
   fprintf('Already using Psychtoolbox %s\n', PsychtoolboxVersion);
 else
