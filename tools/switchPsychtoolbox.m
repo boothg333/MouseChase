@@ -29,7 +29,13 @@ addpath(newPaths{keep});
 % The Windows MEX files must shadow any same-named M-file stubs
 mexDir = fullfile(newRoot, 'PsychBasic', 'MatlabWindowsFilesR2007a');
 if exist(mexDir, 'dir'); addpath(mexDir, '-begin'); end
-clear functions %#ok<CLFUNC> drop cached PsychtoolboxRoot/version
+clear functions %#ok<CLFUNC>
+clear global Psychtoolbox % PsychtoolboxVersion caches the version here
 rehash path
 fprintf('Now using Psychtoolbox %s (%s)\n', PsychtoolboxVersion, PsychtoolboxRoot);
+fprintf('Screen MEX: %s\n', which('Screen'));
+if ~startsWith(lower(which('Screen')), lower(newRoot))
+  warning('switchPsychtoolbox:shadowed', ...
+    'Screen still resolves outside %s: another Psychtoolbox copy is on the path.', newRoot);
+end
 end
