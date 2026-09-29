@@ -1,210 +1,573 @@
-function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~)
-%MOUSECHASEDEMO Signals experiment definition for the Mouse Chase task.
-%   The subject controls the cursor and attempts to catch a wandering bug.
-%   Cursor position is sampled from the mouse signal, while the bug state is
-%   advanced by a Signals scan at a fixed update rate.
+function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
+%MOUSECHASEDEMO Signals experiment definition: a mouse chases a virtual bug.
+%   A bug wanders over a touchscreen floor, hides under objects and flees
+%   from moving touches. Touches come from the multi-touch overlay (paws,
+%   tail), read with the Psychtoolbox TouchQueue (Psychtoolbox >= 3.0.16).
+%   When any contact lands within p.catchRadius of the visible bug, a
+%   reward of p.rewardSize ul is delivered, the trial ends and the bug
+%   respawns from the screen edge after p.respawnDelay seconds.
+%
+%   The session stops after p.targetCatches catches, after p.maxDuration
+%   seconds (both may be Inf), when mc's End button is pressed, or after
+%   numRepeats trials (Rigbox default 1000; raise it in mc for more).
+%
+%   World coordinates are centimetres on the screen surface, origin at the
+%   screen centre, x rightwards and y upwards. They are converted to the
+%   visual degrees Signals draws in using the screen geometry stored in the
+%   rig's hardware.mat (field 'touchScreen', written by
+%   tools/configureTouchScreenRig.m), which must match rig.screens.
+%
+%   Environments (floor and hiding objects) are loaded by name from the
+%   MouseChaseEnvironments folder next to this file; see loadEnvironment.
+%
+%   Logged events (besides Rigbox's own):
+%     bug          [x y heading hidden alive] every update (cm, rad)
+%     touches      N x 8 [id x y w h vx vy age] active contacts (cm, cm/s, s)
+%     touchEvents  M x 7 [type id x y w h time] raw touch events
+%                  (type 2 begin, 3 move, 4 end, 5 all touches lost)
+%     catches      catch count, updating at each catch
 
-%% Experiment and arena constants
-updateTime = 0.03;
-arenaSz = [180 105];
-arenaColor = [1 1 1];
-rockCenter = [0 0];
-rockSz = [36 21];
-outerPad = 4;
+%% Shared, mutable context (touch queue, screen geometry)
+% A containers.Map is a handle object, so the callbacks below all see and
+% update the same instance. Nothing touching hardware runs at definition
+% time: mc also runs this function (with dummy signals) to read parameters.
+ctx = containers.Map();
+envDir = fullfile(fileparts(mfilename('fullpath')), 'MouseChaseEnvironments');
 
-targetCatches = p.targetCatches;
-bugColor = p.bugColor;
-rockColor = p.rockColor;
-catchRadius = p.catchRadius;
+%% Parameters
+% The game functions receive the whole parameter struct, but mc only lists
+% parameters that are referenced as p.<name> here, so reference them all.
+gamePars = {'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
+  'visualRange', 'threatSpeed', 'landingThreatTime', 'obstacleRange', ...
+  'escapeGain', 'maxEscapeThrust', 'wanderThrust', 'wanderNoise', ...
+  'friction', 'maxTurnRate', 'creviceDepth', 'showTouches'};
+for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
-% inputs.wheel is the mouse-linked input in the Signals experiment setup.
-% Its value is not used as a wheel displacement: each update prompts a fresh
-% cursor-position sample, allowing the cursor to act as a two-dimensional
-% behavioural input.
-mouse = inputs.wheel;
-cursor = mouse.map(@(~) getCursorPosition(arenaSz));
-tUpdate = skipRepeats(t - mod(t, updateTime));
-cursorAtUpdate = cursor.at(tUpdate);
+%% Environment
+% Derived from expStart rather than directly from p.environment: during
+% parameter inference anything derived from p is p itself, and subscripting
+% it (floor.image etc.) would add bogus parameters.
+env = events.expStart.map2(p.environment.skipRepeats(), ...
+  @(~, id) loadEnvironment(id, envDir));
 
-%% World state
-gameDataInit = struct;
-gameDataInit.bugPos = [0 0];
-gameDataInit.bugVel = [0 0];
-gameDataInit.wanderAngle = rand() * 2 * pi;
-gameDataInit.heading = gameDataInit.wanderAngle;
-gameDataInit.cursorPos = [0 0];
-gameDataInit.distanceToBug = inf;
-gameDataInit.arenaSz = arenaSz;
-gameDataInit.rockCenter = rockCenter;
-gameDataInit.rockSz = rockSz;
-gameDataInit.outerPad = outerPad;
+%% Game state, advanced at every Signals update after experiment start
+running = events.expStart.then(true);
+tRun = t.keepWhen(running);
+seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
+  'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
+  'catchCount', 0, 'evading', false, ...
+  'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
+state = tRun.scan(@(s, tNow, P, e) updateGame(s, tNow, P, e, ctx), seed, ...
+  'pars', p, env).subscriptable();
 
-gameData = cursorAtUpdate.scan(@updateGame, gameDataInit).subscriptable;
-
-  function gameData = updateGame(gameData, cursorPos)
-    cursorSpeed = norm(cursorPos - gameData.cursorPos) / updateTime;
-    [gameData.bugPos, gameData.bugVel, gameData.wanderAngle, ...
-      gameData.heading] = moveBug(...
-      gameData.bugPos, gameData.bugVel, cursorPos, cursorSpeed, ...
-      gameData.wanderAngle, gameData.heading, updateTime, ...
-      gameData.arenaSz, gameData.rockCenter, gameData.rockSz, ...
-      gameData.outerPad);
-    gameData.cursorPos = cursorPos;
-    gameData.distanceToBug = norm(cursorPos - gameData.bugPos);
-  end
-
-bugX = gameData.bugPos(1);
-bugY = gameData.bugPos(2);
-bugHeading = gameData.heading;
-cursorX = gameData.cursorPos(1);
-cursorY = gameData.cursorPos(2);
-distanceToBug = gameData.distanceToBug;
-
-% A catch is armed once per trial, after a short grace period, and fires only
-% when the cursor enters the catch radius. The Signals runner then advances
-% to the next trial.
-caught = distanceToBug <= catchRadius;
-catchArm = events.newTrial.delay(1);
-catchEvent = catchArm.setTrigger(caught);
+%% Catches, reward, trials and stopping
+catchCount = state.catchCount.skipRepeats();
+catchEvent = catchCount.keepWhen(catchCount > 0);
 events.endTrial = catchEvent;
+events.catches = catchEvent;
+outputs.reward = p.rewardSize.at(catchEvent);
+events.totalReward = outputs.reward.scan(@plus, 0);
 
-catchCount = catchEvent.scan(@plus, 0);
-events.catch = catchEvent;
-events.catchCount = catchCount;
-events.cursorX = cursorX;
-events.cursorY = cursorY;
-events.bugX = bugX;
-events.bugY = bugY;
-events.distanceToBug = distanceToBug;
-outputs.catch = catchEvent.then(1);
+elapsed = t - t.at(events.expStart);
+stop = (state.catchCount >= p.targetCatches) | (elapsed >= p.maxDuration);
+events.expStop = stop.skipRepeats().then(true);
+% Hand the touch device back when the session ends (it is also reset at
+% the start of the next session, in case this never runs)
+events.touchReleased = events.expStop.map(@(~) releaseTouch(ctx));
 
-endGame = catchCount >= targetCatches;
-events.expStop = endGame.then(1);
+%% Logging
+events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]);
+events.touches = state.contacts.skipRepeats();
+touchEvents = state.touchEvents;
+events.touchEvents = touchEvents.keepWhen(touchEvents.map(@(e) ~isempty(e)));
+events.evading = state.evading.skipRepeats();
+events.environment = env.map(@(e) e.id);
 
 %% Visual stimuli
-arena = vis.patch(t, 'rectangle');
-arena.dims = arenaSz;
-arena.azimuth = 0;
-arena.altitude = 0;
-arena.colour = arenaColor;
-arena.show = true;
+% Signals draws layers in alphabetical order of their names, hence the
+% prefixes: floor, then bug, then hiding objects (which cover the bug),
+% then optional touch markers.
+floorDraw = env.map(@(e) floorToDraw(e, ctx)).subscriptable();
+floorImg = vis.image(t);
+floorImg.sourceImage = floorDraw.image;
+floorImg.dims = floorDraw.dims;
+floorImg.repeat = floorDraw.repeat;
+floorImg.azimuth = 0;
+floorImg.altitude = 0;
+floorImg.show = true;
+visStim.a_floor = floorImg;
 
-rock = vis.patch(t, 'rectangle');
-rock.dims = rockSz;
-rock.azimuth = rockCenter(1);
-rock.altitude = rockCenter(2);
-rock.colour = rockColor;
-rock.show = true;
-
+bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).subscriptable();
 bug = vis.patch(t, 'circle');
-bug.dims = [p.bugDiameter p.bugDiameter];
-bug.azimuth = bugX;
-bug.altitude = bugY;
-bug.orientation = rad2deg(bugHeading);
-bug.colour = bugColor;
-bug.show = true;
+bug.azimuth = bugDraw.azimuth;
+bug.altitude = bugDraw.altitude;
+bug.dims = bugDraw.dims;
+bug.orientation = bugDraw.orientation;
+bug.colour = p.bugColour;
+bug.show = bugDraw.show;
+visStim.b_bug = bug;
 
-% The cursor is represented by a small cross so the subject can see the
-% position used by the task, without relying on the operating-system cursor.
-cursorStim = vis.patch(t, 'cross');
-cursorStim.dims = [2 2];
-cursorStim.azimuth = cursorX;
-cursorStim.altitude = cursorY;
-cursorStim.colour = [0 0 1];
-cursorStim.show = true;
+% Fixed pools of rectangle and ellipse patches; the environment decides
+% how many are shown and where.
+nPool = 6;
+objDraw = env.map(@(e) objectsToDraw(e, nPool, ctx));
+shapes = {'rectangle', 'circle'};
+for iShape = 1:2
+  for k = 1:nPool
+    o = objDraw.map(@(d) d(iShape, k)).subscriptable();
+    obj = vis.patch(t, shapes{iShape});
+    obj.azimuth = o.azimuth;
+    obj.altitude = o.altitude;
+    obj.dims = o.dims;
+    obj.orientation = o.orientation;
+    obj.colour = o.colour;
+    obj.show = o.show;
+    visStim.(sprintf('c_%s%02d', shapes{iShape}(1:4), k)) = obj;
+  end
+end
 
-visStim.arena = arena;
-visStim.rock = rock;
-visStim.bug = bug;
-visStim.cursor = cursorStim;
+% Touch markers, for checking that drawn positions line up with touches
+nMarkers = 10;
+markerDraw = state.map2(p, @(s, P) touchesToDraw(s, P, nMarkers, ctx));
+for k = 1:nMarkers
+  m = markerDraw.map(@(d) d(k)).subscriptable();
+  marker = vis.patch(t, 'circle');
+  marker.azimuth = m.azimuth;
+  marker.altitude = m.altitude;
+  marker.dims = m.dims;
+  marker.colour = [1 0 0]';
+  marker.show = m.show;
+  visStim.(sprintf('d_touch%02d', k)) = marker;
+end
 
-%% Experimenter parameters
+%% Experimenter parameters (defaults)
 try
-  p.targetCatches = 5;
-  p.bugColor = [0 0 0]';
-  p.rockColor = [0.7 0.7 0.7]';
-  p.catchRadius = 3;
-  p.bugDiameter = 2;
+  p.rewardSize = 5;          % ul per catch
+  p.targetCatches = 250;     % stop after this many catches (Inf allowed)
+  p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
+  p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
+  p.catchRadius = 1.5;       % cm, contact-to-bug-centre distance for a catch
+  p.respawnDelay = 2;        % s the bug stays away after a catch
+  p.bugLength = 2.4;         % cm
+  p.bugWidth = 0.9;          % cm
+  p.bugColour = [0 0 0]';
+  p.visualRange = 21;        % cm, distance at which contacts can scare the bug
+  p.threatSpeed = 4.5;       % cm/s, contacts moving faster than this scare it
+  p.landingThreatTime = 0.2; % s, newly landed contacts scare it this long
+  p.obstacleRange = 2;       % cm, bug steers around still contacts this close
+  p.escapeGain = 35;         % 1/s^2, escape thrust per cm inside visualRange
+  p.maxEscapeThrust = 600;   % cm/s^2
+  p.wanderThrust = 24;       % cm/s^2 (terminal wander speed = thrust/friction)
+  p.wanderNoise = 3;         % rad/s, random drift of the wander heading
+  p.friction = 6;            % 1/s
+  p.maxTurnRate = 8;         % rad/s
+  p.creviceDepth = 4.5;      % cm the bug may go past the screen edge
+  p.showTouches = false;     % draw red markers on active contacts
 catch
 end
+end
 
-  function pos = getCursorPosition(arenaSize)
-    screens = Screen('Screens');
-    [screenWidth, screenHeight] = Screen('WindowSize', max(screens));
-    [pixelX, pixelY] = GetMouse();
-    pos = [pixelX / screenWidth * arenaSize(1) - arenaSize(1) / 2,...
-      arenaSize(2) / 2 - pixelY / screenHeight * arenaSize(2)];
+%% ===================== Game logic =====================
+
+function s = updateGame(s, tNow, P, env, ctx)
+%UPDATEGAME Advance the bug by one Signals update.
+g = geometry(ctx);
+if isempty(s.t) % first update: start with the bug entering from an edge
+  s.t = tNow;
+  s = spawnBug(s, g, P);
+end
+dt = min(max(tNow - s.t, 0), 0.1); % cap to avoid jumps after a stall
+s.t = tNow;
+[s.contacts, s.touchEvents] = pollTouches(ctx);
+
+if ~s.alive
+  s.evading = false;
+  if tNow >= s.respawnAt
+    s = spawnBug(s, g, P);
   end
-
+  return
 end
 
-function [newPos, newVel, newWanderAngle, newHeading] = moveBug(...
-    pos, vel, cursorPos, cursorSpeed, wanderAngle, heading, dt, ...
-    arenaSz, rockCenter, rockSz, outerPad)
-%MOVEBUG Advance the bug using non-holonomic kinematics.
+half = g.dimsCm / 2;
+onScreen = all(abs(s.pos) <= half);
+s.hidden = ~onScreen || isUnderObject(s.pos, env.objects);
 
-isUnderRock = isInsideRectangle(pos, rockCenter, rockSz);
-isOffScreen = pos(1) < -arenaSz(1) / 2 || ...
-    pos(1) > arenaSz(1) / 2 || pos(2) < -arenaSz(2) / 2 || ...
-    pos(2) > arenaSz(2) / 2;
-isHidden = isUnderRock || isOffScreen;
-
-visualRange = 0.5;
-motionThreshold = 0.25;
-dist = norm(cursorPos - pos);
-isEvading = ~isHidden && dist < visualRange && dist > 0 && ...
-    cursorSpeed > motionThreshold;
-
-if isEvading
-  direction = (pos - cursorPos) / dist;
-  desiredHeading = atan2(direction(2), direction(1));
-  thrust = min((visualRange - dist) * 12, 6);
-  newWanderAngle = desiredHeading;
+% Threats and obstacles from the current contacts
+C = s.contacts;
+nC = size(C, 1);
+if nC > 0
+  rel = [s.pos(1) - C(:,2), s.pos(2) - C(:,3)];
+  d = hypot(rel(:,1), rel(:,2));
+  speed = hypot(C(:,6), C(:,7));
+  isThreat = (speed > P.threatSpeed | C(:,8) < P.landingThreatTime) & ...
+    d < P.visualRange & d > 0;
+  isObstacle = ~isThreat & d < P.obstacleRange & d > 0;
 else
-  newWanderAngle = wanderAngle + randn() * 2 * dt;
-  desiredHeading = newWanderAngle;
-  thrust = 0.4;
+  isThreat = false(0, 1);
+  isObstacle = false(0, 1);
 end
 
-deltaAngle = mod(desiredHeading - heading + pi, 2 * pi) - pi;
-maxTurnRate = 6;
-turnStep = sign(deltaAngle) * min(abs(deltaAngle), maxTurnRate * dt);
-newHeading = heading + turnStep;
-
-headingVec = [cos(newHeading), sin(newHeading)];
-newVel = vel + headingVec * thrust * dt - 6 * vel * dt;
-forwardSpeed = max(0, dot(newVel, headingVec));
-maxSpeed = 1.2;
-newVel = min(forwardSpeed, maxSpeed) * headingVec;
-newPos = pos + newVel * dt;
-
-hitOuterWall = false;
-if newPos(1) < -arenaSz(1) / 2 - outerPad
-  newPos(1) = -arenaSz(1) / 2 - outerPad;
-  hitOuterWall = true;
-elseif newPos(1) > arenaSz(1) / 2 + outerPad
-  newPos(1) = arenaSz(1) / 2 + outerPad;
-  hitOuterWall = true;
-end
-if newPos(2) < -arenaSz(2) / 2 - outerPad
-  newPos(2) = -arenaSz(2) / 2 - outerPad;
-  hitOuterWall = true;
-elseif newPos(2) > arenaSz(2) / 2 + outerPad
-  newPos(2) = arenaSz(2) / 2 + outerPad;
-  hitOuterWall = true;
+s.evading = ~s.hidden && any(isThreat);
+if s.evading
+  % Flee along the summed push of all threats, nearer ones pushing harder
+  w = P.visualRange - d(isThreat);
+  push = sum(w .* rel(isThreat,:) ./ d(isThreat), 1);
+  desiredHeading = atan2(push(2), push(1));
+  thrust = min(P.escapeGain * max(w), P.maxEscapeThrust);
+  s.wanderAngle = desiredHeading;
+else
+  s.wanderAngle = s.wanderAngle + randn() * P.wanderNoise * dt;
+  wanderDir = [cos(s.wanderAngle), sin(s.wanderAngle)];
+  if any(isObstacle) % steer around still paws
+    away = sum(rel(isObstacle,:) ./ d(isObstacle), 1);
+    wanderDir = wanderDir + 2 * away;
+  end
+  desiredHeading = atan2(wanderDir(2), wanderDir(1));
+  thrust = P.wanderThrust;
 end
 
-if hitOuterWall
-  centerDir = -newPos;
-  returnHeading = atan2(centerDir(2), centerDir(1));
-  newWanderAngle = returnHeading;
-  newHeading = returnHeading;
-  returnSpeed = min(maxSpeed, max(forwardSpeed, 0.4));
-  newVel = returnSpeed * [cos(newHeading), sin(newHeading)];
+% Non-holonomic motion: turn at a limited rate, thrust along the heading,
+% no sideways skidding
+deltaAngle = mod(desiredHeading - s.heading + pi, 2 * pi) - pi;
+s.heading = s.heading + sign(deltaAngle) * min(abs(deltaAngle), P.maxTurnRate * dt);
+headingVec = [cos(s.heading), sin(s.heading)];
+vel = s.vel + headingVec * thrust * dt - P.friction * s.vel * dt;
+s.vel = max(0, dot(vel, headingVec)) * headingVec;
+prevPos = s.pos;
+s.pos = s.pos + s.vel * dt;
+
+% The bug can go a little past the screen edge ("crevice"), then turns back
+limit = half + P.creviceDepth;
+clamped = min(max(s.pos, -limit), limit);
+hitWall = any(clamped ~= s.pos);
+s.pos = clamped;
+% Areas the mouse physically cannot reach (e.g. the box over the sync
+% square) are walls, so the bug cannot shelter there
+for b = 1:size(g.blockedCm, 1)
+  if isInsideRect(s.pos, g.blockedCm(b,:), P.bugLength / 2)
+    s.pos = prevPos;
+    hitWall = true;
+  end
+end
+if hitWall
+  s.wanderAngle = atan2(-s.pos(2), -s.pos(1)); % head back to the centre
+  s.vel = [0 0];
+end
+
+% Catch: any contact on the visible bug
+if ~s.hidden && nC > 0 && any(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius)
+  s.catchCount = s.catchCount + 1;
+  s.alive = false;
+  s.evading = false;
+  s.respawnAt = tNow + P.respawnDelay;
 end
 end
 
-function inside = isInsideRectangle(pos, center, dims)
-inside = abs(pos(1) - center(1)) <= dims(1) / 2 && ...
-    abs(pos(2) - center(2)) <= dims(2) / 2;
+function s = spawnBug(s, g, P)
+%SPAWNBUG Place the bug in the crevice beyond a random screen edge, facing in.
+half = g.dimsCm / 2;
+depth = P.creviceDepth / 2;
+side = randi(4);
+along = (rand() - 0.5) * 1.6; % keep away from the corners
+switch side
+  case 1, s.pos = [-half(1) - depth, along * half(2)];
+  case 2, s.pos = [half(1) + depth, along * half(2)];
+  case 3, s.pos = [along * half(1), -half(2) - depth];
+  case 4, s.pos = [along * half(1), half(2) + depth];
+end
+for b = 1:size(g.blockedCm, 1) % never start next to a blocked area
+  if isInsideRect(s.pos, g.blockedCm(b,:), P.creviceDepth + P.bugLength)
+    s.pos = -s.pos;
+  end
+end
+s.heading = atan2(-s.pos(2), -s.pos(1)) + (rand() - 0.5);
+s.wanderAngle = s.heading;
+s.vel = [0 0];
+s.alive = true;
+s.hidden = true;
+end
+
+function hidden = isUnderObject(pos, objects)
+hidden = false;
+for k = 1:numel(objects)
+  o = objects(k);
+  a = -o.angle * pi / 180; % into the object's own frame
+  r = [cos(a) -sin(a); sin(a) cos(a)] * (pos(:) - o.centre(:));
+  switch o.shape
+    case 'rectangle'
+      inside = all(abs(r') <= o.size / 2);
+    otherwise % ellipse
+      inside = sum((2 * r' ./ o.size) .^ 2) <= 1;
+  end
+  if inside; hidden = true; return; end
+end
+end
+
+function inside = isInsideRect(pos, rect, margin)
+% rect = [xmin ymin xmax ymax] in cm
+inside = pos(1) >= rect(1) - margin && pos(1) <= rect(3) + margin && ...
+  pos(2) >= rect(2) - margin && pos(2) <= rect(4) + margin;
+end
+
+%% ===================== Touch input =====================
+
+function [contacts, raw] = pollTouches(ctx)
+%POLLTOUCHES Read all touch events since the last call.
+%   contacts: N x 8 [id x y w h vx vy age] of the contacts currently down
+%   raw: M x 7 [type id x y w h time] events read in this call
+%   Positions in cm; falls back to the mouse pointer (id 0, while a button
+%   is down) if no touchscreen is available, e.g. for desk testing.
+contacts = zeros(0, 8);
+raw = zeros(0, 7);
+if isKey(ctx, 'released'); return; end % session over: ignore input
+if ~isKey(ctx, 'tracks'); openTouch(ctx); end
+g = geometry(ctx);
+tracks = ctx('tracks'); % [id x y w h vx vy tBegin tLast]
+dev = ctx('dev');
+if ~isempty(dev)
+  while TouchEventAvail(dev)
+    evt = TouchEventGet(dev, ctx('win'));
+    xy = px2cm([evt.X evt.Y], g);
+    wh = [0 0];
+    if numel(evt.Valuators) >= 4; wh = evt.Valuators(3:4) .* g.cmPerPx; end
+    id = double(evt.Keycode);
+    raw(end+1,:) = [evt.Type id xy wh evt.Time]; %#ok<AGROW>
+    tracks = updateTrack(tracks, evt.Type, id, xy, wh, evt.Time);
+  end
+else % mouse fallback
+  if isempty(ctx('win'))
+    [mx, my, buttons] = GetMouse();
+  else
+    [mx, my, buttons] = GetMouse(ctx('win'));
+  end
+  wasDown = ~isempty(tracks);
+  isDown = any(buttons);
+  type = 0;
+  if isDown && ~wasDown; type = 2; elseif isDown; type = 3; elseif wasDown; type = 4; end
+  if type
+    xy = px2cm([mx my], g);
+    tNow = GetSecs;
+    raw = [type 0 xy 0 0 tNow];
+    tracks = updateTrack(tracks, type, 0, xy, [0 0], tNow);
+  end
+end
+ctx('tracks') = tracks; %#ok<NASGU> ctx is a handle (containers.Map)
+contacts =[tracks(:,1:7), GetSecs - tracks(:,8)];
+end
+
+function tracks = updateTrack(tracks, type, id, xy, wh, time)
+i = find(tracks(:,1) == id, 1);
+switch type
+  case 2 % touch begins
+    if ~isempty(i); tracks(i,:) = []; end
+    tracks(end+1,:) = [id xy wh 0 0 time time];
+  case 3 % touch moves
+    if isempty(i) % missed the begin event
+      tracks(end+1,:) = [id xy wh 0 0 time time];
+      return
+    end
+    dtE = time - tracks(i,9);
+    if dtE > 0
+      v = (xy - tracks(i,2:3)) / dtE;
+      tracks(i,6:7) = 0.5 * tracks(i,6:7) + 0.5 * v; % light smoothing
+      tracks(i,9) = time;
+    end
+    tracks(i,2:5) = [xy wh];
+  case 4 % touch ends
+    if ~isempty(i); tracks(i,:) = []; end
+  case 5 % touch sequence compromised: forget everything
+    tracks = zeros(0, 9);
+end
+end
+
+function openTouch(ctx)
+%OPENTOUCH Start the TouchQueue on the stimulus window, or fall back to mouse.
+ctx('tracks') = zeros(0, 9);
+wins = Screen('Windows');
+wins = wins(arrayfun(@(w) Screen('WindowKind', w) == 1, wins));
+win = wins(1:min(1, end)); % the stimulus window ([] if none is open)
+ctx('win') = win;
+dev = [];
+try
+  dev = GetTouchDeviceIndices();
+catch
+end
+if isempty(dev)
+  warning('MouseChase:noTouch', ...
+    'No touchscreen found (needs Psychtoolbox >= 3.0.16); using the mouse instead.');
+  ctx('dev') = []; %#ok<NASGU>
+  return
+end
+dev = dev(1);
+try TouchQueueRelease(dev); catch; end % left over from an aborted session
+TouchQueueCreate(win, dev);
+TouchQueueStart(dev);
+ctx('dev') = dev; %#ok<NASGU>
+end
+
+function ok = releaseTouch(ctx)
+ok = true;
+ctx('released') = true;
+if isKey(ctx, 'dev') && ~isempty(ctx('dev'))
+  try
+    TouchQueueStop(ctx('dev'));
+    TouchQueueRelease(ctx('dev'));
+  catch
+  end
+  ctx('dev') = []; %#ok<NASGU>
+end
+end
+
+%% ===================== Screen geometry =====================
+
+function g = geometry(ctx)
+%GEOMETRY Screen size in pixels and cm, and the viewing distance that
+%   defines the degrees Signals draws in. Read once from the rig's
+%   hardware.mat ('touchScreen'); falls back to POPPY-STIM's values.
+if isKey(ctx, 'geom'); g = ctx('geom'); return; end
+g = struct('pxSize', [1280 1024], 'dimsCm', [37.6 30.1], 'distanceCm', 100, ...
+  'blockedPx', zeros(0, 4));
+try
+  rigCfg = getOr(dat.paths, 'rigConfig');
+  s = load(fullfile(rigCfg, 'hardware.mat'), 'touchScreen');
+  if isfield(s, 'touchScreen')
+    for f = fieldnames(s.touchScreen)'
+      g.(f{1}) = s.touchScreen.(f{1});
+    end
+  else
+    warning('MouseChase:noGeometry', ...
+      'No touchScreen field in %s; using default screen geometry.', rigCfg);
+  end
+catch ex
+  warning('MouseChase:noGeometry', 'Could not load screen geometry: %s', ex.message);
+end
+g.cmPerPx = g.dimsCm ./ g.pxSize;
+g.blockedCm = zeros(size(g.blockedPx, 1), 4);
+for b = 1:size(g.blockedPx, 1) % [left top right bottom] px -> [xmin ymin xmax ymax] cm
+  c1 = px2cm(g.blockedPx(b,[1 4]), g);
+  c2 = px2cm(g.blockedPx(b,[3 2]), g);
+  g.blockedCm(b,:) = [c1 c2];
+end
+ctx('geom') = g; %#ok<NASGU>
+end
+
+function xy = px2cm(px, g)
+xy = [(px(1) - g.pxSize(1) / 2) * g.cmPerPx(1), ...
+  (g.pxSize(2) / 2 - px(2)) * g.cmPerPx(2)];
+end
+
+function [azAlt, degPerCm] = cm2deg(xy, g)
+%CM2DEG Screen position (cm, y up) to Signals [azimuth altitude] (deg) for
+%   a flat screen straight ahead at g.distanceCm, plus the local size scale
+%   (deg per cm). NB Signals' altitude increases DOWN the screen.
+D = g.distanceCm;
+x = xy(1); y = xy(2);
+azAlt = [atan2d(x, D), -atan2d(y, hypot(x, D))];
+degPerCm = (180 / pi) * mean([D / (x^2 + D^2), hypot(x, D) / (x^2 + y^2 + D^2)]);
+end
+
+function [az, alt, degPerCm] = patchPosition(xy, angleDeg, g)
+%PATCHPOSITION Azimuth/altitude to give a Signals patch so that, rotated by
+%   angleDeg (anticlockwise on screen), its centre is drawn at xy (cm).
+%   Signals' shader rotates a texture about [0 0] *before* offsetting it, so
+%   a rotated patch at azimuth/altitude A is drawn at R(angle)^-1 * A; the
+%   offset is therefore pre-rotated here.
+[azAlt, degPerCm] = cm2deg(xy, g);
+off = [cosd(angleDeg) -sind(angleDeg); sind(angleDeg) cosd(angleDeg)] * azAlt(:);
+az = off(1);
+alt = off(2);
+end
+
+%% ===================== Drawing =====================
+
+function d = bugToDraw(s, P, ctx)
+g = geometry(ctx);
+d.orientation = mod(s.heading * 180 / pi, 360);
+[d.azimuth, d.altitude, k] = patchPosition(s.pos, d.orientation, g);
+d.dims = k * [P.bugLength; P.bugWidth];
+d.show = s.alive;
+end
+
+function d = floorToDraw(env, ctx)
+g = geometry(ctx);
+half = abs(cm2deg(g.dimsCm / 2, g));
+d.dims = 2.2 * half(:); % overscan: the flat screen isn't a rectangle in degrees
+d.repeat = env.floorRepeat;
+if isempty(env.floorImage)
+  d.image = uint8(255 * reshape(env.floorColour, 1, 1, 3));
+else
+  d.image = env.floorImage;
+end
+end
+
+function d = objectsToDraw(env, nPool, ctx)
+%OBJECTSTODRAW Row 1: rectangle pool, row 2: ellipse pool.
+g = geometry(ctx);
+blank = struct('azimuth', 0, 'altitude', 0, 'dims', [1; 1], ...
+  'orientation', 0, 'colour', [0; 0; 0], 'show', false);
+d = repmat(blank, 2, nPool);
+n = [0 0];
+for k = 1:numel(env.objects)
+  o = env.objects(k);
+  row = 1 + ~strcmp(o.shape, 'rectangle');
+  n(row) = n(row) + 1;
+  if n(row) > nPool
+    warning('MouseChase:tooManyObjects', ...
+      'Only %d objects of each shape can be drawn; ignoring the rest.', nPool);
+    continue
+  end
+  [az, alt, kScale] = patchPosition(o.centre, o.angle, g);
+  d(row, n(row)) = struct('azimuth', az, 'altitude', alt, ...
+    'dims', kScale * o.size(:), 'orientation', o.angle, ...
+    'colour', o.colour(:), 'show', true);
+end
+end
+
+function d = touchesToDraw(s, P, n, ctx)
+g = geometry(ctx);
+d = repmat(struct('azimuth', 0, 'altitude', 0, 'dims', [1; 1], 'show', false), 1, n);
+if ~P.showTouches; return; end
+for k = 1:min(n, size(s.contacts, 1))
+  [az, alt, kScale] = patchPosition(s.contacts(k,2:3), 0, g);
+  d(k) = struct('azimuth', az, 'altitude', alt, 'dims', kScale * [1; 1], 'show', true);
+end
+end
+
+%% ===================== Environments =====================
+
+function env = loadEnvironment(id, envDir)
+%LOADENVIRONMENT Load MouseChaseEnvironments/<id>.mat (variable 'env').
+%   An environment is a struct with fields (all optional except objects):
+%     id           name, for the log
+%     floorColour  [r g b] in 0-1, used when there is no floorImage
+%     floorImage   HxW or HxWx3 uint8 image stretched over the screen
+%                  (keep it small, e.g. <= 256 px: it is re-uploaded to the
+%                  graphics card on every frame)
+%     floorRepeat  true to tile floorImage instead of stretching it
+%     objects      struct array of hiding places, each with
+%                    shape  'rectangle' or 'ellipse'
+%                    centre [x y] cm from the screen centre (y up)
+%                    size   [w h] cm
+%                    angle  deg, anticlockwise
+%                    colour [r g b] in 0-1
+%   'default' is built in: grey floor, one rock in the middle.
+if strcmp(id, 'default')
+  env = struct('id', 'default', 'floorColour', [0.5 0.5 0.5], ...
+    'floorImage', [], 'floorRepeat', false, ...
+    'objects', struct('shape', 'rectangle', 'centre', [0 0], ...
+    'size', [7 4.5], 'angle', 0, 'colour', [0.7 0.7 0.7]));
+  return
+end
+f = fullfile(envDir, [id '.mat']);
+assert(exist(f, 'file') == 2, 'MouseChase:noEnvironment', ...
+  'Environment file not found: %s', f);
+s = load(f, 'env');
+env = s.env;
+defaults = struct('id', id, 'floorColour', [0.5 0.5 0.5], ...
+  'floorImage', [], 'floorRepeat', false);
+for f = fieldnames(defaults)'
+  if ~isfield(env, f{1}); env.(f{1}) = defaults.(f{1}); end
+end
+if ~isfield(env, 'objects'); env.objects = struct('shape', {}, 'centre', {}, ...
+    'size', {}, 'angle', {}, 'colour', {}); end
 end

@@ -1,0 +1,2 @@
+function TouchQueueCreate(varargin)
+end

@@ -85,11 +85,11 @@ try
         touchLog{end+1} = evt; %#ok<AGROW>
         id = double(evt.Keycode);
         switch evt.Type
-          case {1, 2} % touch begin / move
+          case {2, 3} % touch begin / move
             active(id) = [evt.X evt.Y];
-          case 3 % touch end
+          case 4 % touch end
             if isKey(active, id); remove(active, id); end
-          case 4 % touch sequence lost
+          case 5 % touch sequence compromised: all touches invalid
             active = containers.Map('KeyType', 'double', 'ValueType', 'any');
         end
         maxActive = max(maxActive, active.Count);
