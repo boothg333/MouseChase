@@ -12,6 +12,9 @@ function focusTest()
 steps = {'1: plain window', '2: keyboard queue', '3: dat.paths', '4: touch queue'};
 dev = [];
 try
+  % Timing self-tests can fail on this PC (desktop compositor) and would
+  % abort before step 1; they're irrelevant for a focus test
+  Screen('Preference', 'SkipSyncTests', 1);
   win = Screen('OpenWindow', max(Screen('Screens')), 128);
   Screen('TextSize', win, 40);
   for k = 1:numel(steps)
