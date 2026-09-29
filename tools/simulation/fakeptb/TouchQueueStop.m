@@ -1,2 +1,0 @@
-function TouchQueueStop(varargin)
-end

@@ -1,7 +1,7 @@
 function simMouseChase()
 % Headless simulation of MouseChaseDemo with scripted touches.
 here = fileparts(mfilename('fullpath'));
-addpath(fullfile(here, 'fakeptb'), '-begin');
+[~, fakeCleanup] = makeFakePtb(); %#ok<ASGLU> removed from the path on return
 defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseDemo.m');
 global SIM
 SIM = struct('time', 0, 'released', 0);
@@ -88,6 +88,7 @@ for c = 1:2
   end
 end
 fprintf('expStop after target: %d, touch queue released: %d\n', stopped, SIM.released);
+delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
 
   function step()
     SIM.time = SIM.time + dt;

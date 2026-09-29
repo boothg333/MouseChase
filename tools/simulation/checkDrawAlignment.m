@@ -3,7 +3,7 @@ function checkDrawAlignment()
 % is drawn (per the reconstructed slimshady/vis.screen maths) exactly where
 % the game thinks the bug is, with its long axis along the heading.
 here = fileparts(mfilename('fullpath'));
-addpath(fullfile(here, 'fakeptb'), '-begin');
+[~, fakeCleanup] = makeFakePtb(); %#ok<ASGLU> removed from the path on return
 defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseDemo.m');
 global SIM
 SIM = struct('time', 0, 'released', 0);
@@ -45,6 +45,7 @@ for k = 1:1800
 end
 fprintf('Checked %d frames: max position error %.2f px, max heading error %.2f deg\n', ...
   n, maxPosErr, maxAngErr);
+delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
 
   function px = texPointPx(off, ang, duv)
     R = [cosd(ang) -sind(ang); sind(ang) cosd(ang)];
