@@ -10,7 +10,8 @@ rng(1);
 
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
-pars.targetCatches = 2;
+pars.targetCatches = 3; % keep it quick
+pars.rewardProbability = 0.5;
 
 net = sig.Net;
 clk = @() SIM.time;
@@ -25,8 +26,9 @@ outputs = sig.Registry(clk);
 expDef = fileFunction(defFile);
 expDef(t, events, p, visual, inputs, outputs, []);
 
-rewards = []; catches = []; stopped = false;
+rewards = []; catches = []; rewardedFlags = []; stopped = false;
 hR = outputs.reward.onValue(@(v) addReward(v)); %#ok<NASGU>
+hW = events.rewarded.onValue(@(v) addRewarded(v)); %#ok<NASGU>
 hC = events.catches.onValue(@(v) addCatch(v)); %#ok<NASGU>
 hS = events.expStop.onValue(@(v) setStop()); %#ok<NASGU>
 
@@ -68,8 +70,21 @@ touch(4, 7, start - [9 0]);
 step();
 fprintf('Threat: evading seen %d, bug speed rose to %.1f cm/s\n', evading, max(spd));
 
-%% 3. A still touch landing on the visible bug catches it
-for c = 1:2
+%% 3. New trial parameters (as with conditional params) change the bug
+fast = pars;
+fast.wanderThrust = 2 * pars.wanderThrust;
+post(p, fast);
+B = zeros(0, 5);
+for k = 1:round(10 / dt)
+  step();
+  B(end+1,:) = events.bug.Node.CurrValue; %#ok<AGROW>
+end
+sp = hypot(diff(B(:,1)), diff(B(:,2))) / dt;
+fprintf('Trial params: wanderThrust %g -> %g, median wander speed now %.1f cm/s\n', ...
+  pars.wanderThrust, fast.wanderThrust, median(sp(B(2:end,5) == 1)));
+
+%% 4. A still touch landing on the visible bug catches it
+for c = 1:pars.targetCatches
   waitVisible();
   b = events.bug.Node.CurrValue;
   touch(2, 20 + c, b(1:2));
@@ -77,8 +92,9 @@ for c = 1:2
   touch(4, 20 + c, b(1:2));
   step();
   a = events.bug.Node.CurrValue;
-  fprintf('Catch %d: catches=%s reward=%s alive after=%d\n', c, mat2str(catches), mat2str(rewards), a(5));
   if c == 1
+    fprintf('Catch 1: catches=%s rewarded=%s reward=%s alive after=%d\n', ...
+      mat2str(catches), mat2str(rewardedFlags), mat2str(rewards), a(5));
     for k = 1:round(1.5 / dt); step(); end
     a = events.bug.Node.CurrValue;
     fprintf('        alive 1.5 s later: %d', a(5));
@@ -87,6 +103,9 @@ for c = 1:2
     fprintf(', 2.5 s later: %d\n', a(5));
   end
 end
+fprintf('%d catches, %d rewarded (p = %g), %d reward outputs totalling %g ul; rewarded events match outputs: %d\n', ...
+  numel(catches), sum(rewardedFlags), pars.rewardProbability, numel(rewards), sum(rewards), ...
+  sum(rewardedFlags) == numel(rewards) && numel(rewardedFlags) == numel(catches));
 fprintf('expStop after target: %d, touch queue released: %d\n', stopped, SIM.released);
 delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
 
@@ -109,6 +128,7 @@ delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicit
   end
   function addReward(v); rewards(end+1) = v; end
   function addCatch(v); catches(end+1) = v; end
+  function addRewarded(v); rewardedFlags(end+1) = v; end
   function setStop(); stopped = true; end
   function l = layerOf(name)
     v = visual.(name).Node.CurrValue;

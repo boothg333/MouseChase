@@ -3,9 +3,14 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   A bug wanders over a touchscreen floor, hides under objects and flees
 %   from moving touches. Touches come from the multi-touch overlay (paws,
 %   tail), read with the Psychtoolbox TouchQueue (Psychtoolbox >= 3.0.16).
-%   When any contact lands within p.catchRadius of the visible bug, a
-%   reward of p.rewardSize ul is delivered, the trial ends and the bug
-%   respawns from the screen edge after p.respawnDelay seconds.
+%   When any contact lands within p.catchRadius of the visible bug, the
+%   trial ends, a reward of p.rewardSize ul is delivered with probability
+%   p.rewardProbability, and the bug respawns from the screen edge after
+%   p.respawnDelay seconds.
+%
+%   One trial = one catch, and the game reads the current trial's
+%   parameters, so trial types (e.g. bug difficulty) can be made with
+%   Rigbox conditional parameters: give a parameter one column per type.
 %
 %   The session stops after p.targetCatches catches, after p.maxDuration
 %   seconds (both may be Inf), when mc's End button is pressed, or after
@@ -26,6 +31,7 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %     touchEvents  M x 7 [type id x y w h time] raw touch events
 %                  (type 2 begin, 3 move, 4 end, 5 all touches lost)
 %     catches      catch count, updating at each catch
+%     rewarded     at each catch: true if it was rewarded
 
 %% Shared, mutable context (touch queue, screen geometry)
 % A containers.Map is a handle object, so the callbacks below all see and
@@ -37,7 +43,7 @@ envDir = fullfile(fileparts(mfilename('fullpath')), 'MouseChaseEnvironments');
 %% Parameters
 % The game functions receive the whole parameter struct, but mc only lists
 % parameters that are referenced as p.<name> here, so reference them all.
-gamePars = {'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
+gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
   'visualRange', 'threatSpeed', 'landingThreatTime', 'obstacleRange', ...
   'escapeGain', 'maxEscapeThrust', 'wanderThrust', 'wanderNoise', ...
   'friction', 'maxTurnRate', 'creviceDepth', 'showTouches'};
@@ -55,7 +61,7 @@ running = events.expStart.then(true);
 tRun = t.keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
-  'catchCount', 0, 'evading', false, ...
+  'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
   'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
 state = tRun.scan(@(s, tNow, P, e) updateGame(s, tNow, P, e, ctx), seed, ...
   'pars', p, env).subscriptable();
@@ -65,7 +71,10 @@ catchCount = state.catchCount.skipRepeats();
 catchEvent = catchCount.keepWhen(catchCount > 0);
 events.endTrial = catchEvent;
 events.catches = catchEvent;
-outputs.reward = p.rewardSize.at(catchEvent);
+% Whether a catch is rewarded is drawn in updateGame (p.rewardProbability)
+rewarded = state.lastCatchRewarded.at(catchEvent);
+events.rewarded = rewarded;
+outputs.reward = p.rewardSize.at(rewarded); % only fires when rewarded is true
 events.totalReward = outputs.reward.scan(@plus, 0);
 
 elapsed = t - t.at(events.expStart);
@@ -142,7 +151,8 @@ end
 
 %% Experimenter parameters (defaults)
 try
-  p.rewardSize = 5;          % ul per catch
+  p.rewardSize = 5;          % ul per rewarded catch
+  p.rewardProbability = 0.8; % chance that a catch is rewarded
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
   p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
@@ -257,6 +267,7 @@ end
 % Catch: any contact on the visible bug
 if ~s.hidden && nC > 0 && any(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius)
   s.catchCount = s.catchCount + 1;
+  s.lastCatchRewarded = rand() < P.rewardProbability;
   s.alive = false;
   s.evading = false;
   s.respawnAt = tNow + P.respawnDelay;
