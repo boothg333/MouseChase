@@ -93,6 +93,7 @@ for k = 1:nDev
   fprintf('HID %d page %d usage %d: %d reports', idx(k), d.usagePageValue, d.usageValue, counts(k));
   if ~isempty(firstError{k}); fprintf('  | first error: %s', firstError{k}); end
   fprintf('\n');
+  if isempty(reports); continue; end
   mine = reports(cell2mat(reports(:,2)) == idx(k), 3);
   if ~isempty(mine)
     lens = cellfun(@numel, mine);
@@ -137,7 +138,8 @@ fprintf(fid, '%s\n', ...
   'Add-Type -Namespace W -Name U -MemberDefinition ''[DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);''', ...
   'Write-Output ("digitizerFlags=0x{0:X2} maxTouches={1}" -f [W.U]::GetSystemMetrics(94), [W.U]::GetSystemMetrics(95))');
 fclose(fid);
-[status, out] = system(sprintf('powershell -NoProfile -ExecutionPolicy Bypass -File "%s"', ps1));
+% builtin: a mock system.m (Rigbox test fixtures) may shadow the real one
+[status, out] = builtin('system', sprintf('powershell -NoProfile -ExecutionPolicy Bypass -File "%s"', ps1));
 delete(ps1);
 if status == 0; s = strtrim(out); else; s = ['query failed: ' strtrim(out)]; end
 end
