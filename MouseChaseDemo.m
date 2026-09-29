@@ -414,6 +414,22 @@ try TouchQueueRelease(dev); catch; end % left over from an aborted session
 TouchQueueCreate(win, dev);
 TouchQueueStart(dev);
 ctx('dev') = dev; %#ok<NASGU>
+% On Windows the TouchQueue opens a visible 'PTB-PsychHID' window that
+% covers the stimulus window: put the stimulus window back on top.
+stimWindowOnTop(true);
+end
+
+function stimWindowOnTop(onTop)
+%STIMWINDOWONTOP Make the stimulus window topmost (or ordinary again).
+%   Runs tools/raiseStimWindow.ps1 in the background so the game doesn't
+%   stall while PowerShell starts.
+script = fullfile(fileparts(mfilename('fullpath')), 'tools', 'raiseStimWindow.ps1');
+if ~ispc || ~exist(script, 'file'); return; end
+opt = '';
+if ~onTop; opt = '-Release'; end
+% builtin: a mock system.m may shadow the real one on the rig
+builtin('system', sprintf(['start "" /b powershell -NoProfile -ExecutionPolicy Bypass ' ...
+  '-WindowStyle Hidden -File "%s" -ProcessId %d %s'], script, feature('getpid'), opt));
 end
 
 function ok = releaseTouch(ctx)
@@ -426,6 +442,7 @@ if isKey(ctx, 'dev') && ~isempty(ctx('dev'))
   catch
   end
   ctx('dev') = []; %#ok<NASGU>
+  stimWindowOnTop(false); % so MATLAB can be reached between experiments
 end
 end
 

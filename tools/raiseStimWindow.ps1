@@ -4,13 +4,16 @@
   given MATLAB process.
 
 .DESCRIPTION
-  raiseStimWindow.ps1 -ProcessId <MATLAB pid> [-ReportOnly]
-  Lists the process's top-level windows (title, visible, minimised). For
-  windows whose title starts with "PTB" it restores them, makes them
-  topmost and gives them focus, unless -ReportOnly is given.
+  raiseStimWindow.ps1 -ProcessId <MATLAB pid> [-ReportOnly | -Release]
+  Lists the process's top-level windows (title, visible, minimised). The
+  Psychtoolbox stimulus window ("PTB Onscreen window ...") is restored, made
+  topmost and given focus, unless -ReportOnly is given. -Release makes it
+  an ordinary (not topmost) window again.
+  Needed because creating a TouchQueue on Windows opens a visible
+  'PTB-PsychHID' window that covers the stimulus window.
   From MATLAB: builtin('system', sprintf('powershell -NoProfile -ExecutionPolicy Bypass -File "%s" -ProcessId %d', f, feature('getpid')))
 #>
-param([Parameter(Mandatory = $true)][int]$ProcessId, [switch]$ReportOnly)
+param([Parameter(Mandatory = $true)][int]$ProcessId, [switch]$ReportOnly, [switch]$Release)
 
 Add-Type -TypeDefinition @'
 using System;
@@ -46,14 +49,18 @@ $ptb = 0
 foreach ($w in [StimWin]::Windows($ProcessId)) {
   $h = $w.Key; $title = $w.Value
   if ([string]::IsNullOrEmpty($title)) { continue }
-  $isPtb = $title -like 'PTB*'
+  $isStim = $title -like 'PTB Onscreen window*'
   Write-Output ("window '{0}': visible={1} minimised={2}" -f $title, [StimWin]::IsWindowVisible($h), [StimWin]::IsIconic($h))
-  if ($isPtb -and -not $ReportOnly) {
-    $ptb++
+  if (-not $isStim -or $ReportOnly) { continue }
+  $ptb++
+  if ($Release) {
+    [void][StimWin]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x0013) # HWND_NOTOPMOST, no move/size/activate
+    Write-Output '  -> no longer topmost'
+  } else {
     [void][StimWin]::ShowWindow($h, 9)                                  # SW_RESTORE
     [void][StimWin]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x0013) # HWND_TOPMOST, no move/size/activate
     $fg = [StimWin]::SetForegroundWindow($h)
     Write-Output ("  -> restored, topmost, foreground={0}; now visible={1} minimised={2}" -f $fg, [StimWin]::IsWindowVisible($h), [StimWin]::IsIconic($h))
   }
 }
-if (-not $ReportOnly -and $ptb -eq 0) { Write-Output 'No PTB window found for this process.' }
+if (-not $ReportOnly -and $ptb -eq 0) { Write-Output 'No PTB stimulus window found for this process.' }
