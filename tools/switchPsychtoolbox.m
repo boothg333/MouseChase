@@ -43,6 +43,17 @@ if isempty(gstRoot)
     'GStreamer 64-bit runtime not found; Screen will not load. See ''help GStreamer''.');
 else
   fprintf('GStreamer runtime: %s\n', gstRoot);
+  % Ensure GStreamer's DLLs (glib etc.) can be found when Screen loads
+  gstBin = fullfile(gstRoot, 'bin');
+  sysPath = getenv('PATH');
+  if ~contains(lower(sysPath), lower(gstBin))
+    setenv('PATH', [gstBin pathsep sysPath]);
+    fprintf('Added %s to the system PATH for this session\n', gstBin);
+  end
+  if ~exist(fullfile(gstBin, 'glib-2.0-0.dll'), 'file')
+    warning('switchPsychtoolbox:incompleteGStreamer', ...
+      'glib-2.0-0.dll not found in %s: GStreamer install may be incomplete.', gstBin);
+  end
 end
 fprintf('Now using Psychtoolbox %s (%s)\n', PsychtoolboxVersion, PsychtoolboxRoot);
 fprintf('Screen MEX: %s\n', which('Screen'));
