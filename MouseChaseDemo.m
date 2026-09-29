@@ -38,7 +38,10 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 % update the same instance. Nothing touching hardware runs at definition
 % time: mc also runs this function (with dummy signals) to read parameters.
 ctx = containers.Map();
+% Resolve file locations now: Rigbox removes this folder from the path once
+% the definition has run, so they can't be found from the callbacks later
 envDir = fullfile(fileparts(mfilename('fullpath')), 'MouseChaseEnvironments');
+ctx('raiseScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'raiseStimWindow.ps1');
 
 %% Parameters
 % The game functions receive the whole parameter struct, but mc only lists
@@ -413,23 +416,29 @@ dev = dev(1);
 try TouchQueueRelease(dev); catch; end % left over from an aborted session
 TouchQueueCreate(win, dev);
 TouchQueueStart(dev);
-ctx('dev') = dev; %#ok<NASGU>
+ctx('dev') = dev;
 % On Windows the TouchQueue opens a visible 'PTB-PsychHID' window that
 % covers the stimulus window: put the stimulus window back on top.
-stimWindowOnTop(true);
+stimWindowOnTop(ctx, true);
 end
 
-function stimWindowOnTop(onTop)
+function stimWindowOnTop(ctx, onTop)
 %STIMWINDOWONTOP Make the stimulus window topmost (or ordinary again).
 %   Runs tools/raiseStimWindow.ps1 in the background so the game doesn't
-%   stall while PowerShell starts.
-script = fullfile(fileparts(mfilename('fullpath')), 'tools', 'raiseStimWindow.ps1');
-if ~ispc || ~exist(script, 'file'); return; end
-opt = '';
+%   stall while PowerShell starts; it logs to C:\LocalExpData.
+if ~ispc; return; end
+script = ctx('raiseScript');
+if ~exist(script, 'file')
+  warning('MouseChase:noRaiseScript', ...
+    '%s not found: the stimulus window may stay hidden behind MATLAB.', script);
+  return
+end
+opt = '-Retries 4';
 if ~onTop; opt = '-Release'; end
 % builtin: a mock system.m may shadow the real one on the rig
 builtin('system', sprintf(['start "" /b powershell -NoProfile -ExecutionPolicy Bypass ' ...
-  '-WindowStyle Hidden -File "%s" -ProcessId %d %s'], script, feature('getpid'), opt));
+  '-WindowStyle Hidden -File "%s" -ProcessId %d -LogFile "%s" %s'], script, ...
+  feature('getpid'), 'C:\LocalExpData\raiseStimWindow.log', opt));
 end
 
 function ok = releaseTouch(ctx)
@@ -441,8 +450,8 @@ if isKey(ctx, 'dev') && ~isempty(ctx('dev'))
     TouchQueueRelease(ctx('dev'));
   catch
   end
-  ctx('dev') = []; %#ok<NASGU>
-  stimWindowOnTop(false); % so MATLAB can be reached between experiments
+  ctx('dev') = [];
+  stimWindowOnTop(ctx, false); % so MATLAB can be reached between experiments
 end
 end
 
