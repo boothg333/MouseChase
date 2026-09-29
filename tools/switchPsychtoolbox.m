@@ -32,6 +32,18 @@ if exist(mexDir, 'dir'); addpath(mexDir, '-begin'); end
 clear functions %#ok<CLFUNC>
 clear global Psychtoolbox % PsychtoolboxVersion caches the version here
 rehash path
+% Normally run at MATLAB startup; on Windows it puts the GStreamer runtime,
+% which Screen depends on, onto the system PATH.
+if exist(fullfile(newRoot, 'PsychBasic', 'PsychStartup.m'), 'file')
+  PsychStartup;
+end
+gstRoot = getenv('GSTREAMER_1_0_ROOT_MSVC_X86_64');
+if isempty(gstRoot)
+  warning('switchPsychtoolbox:noGStreamer', ...
+    'GStreamer 64-bit runtime not found; Screen will not load. See ''help GStreamer''.');
+else
+  fprintf('GStreamer runtime: %s\n', gstRoot);
+end
 fprintf('Now using Psychtoolbox %s (%s)\n', PsychtoolboxVersion, PsychtoolboxRoot);
 fprintf('Screen MEX: %s\n', which('Screen'));
 if ~startsWith(lower(which('Screen')), lower(newRoot))
