@@ -15,6 +15,7 @@ P = double(scr.projection);
 
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
+setenv('MOUSECHASE_DEBUG_EVENTS', '1'); % log the bug position as an event
 net = sig.Net; clk = @() SIM.time;
 t = net.origin('t');
 events = sig.Registry(clk);

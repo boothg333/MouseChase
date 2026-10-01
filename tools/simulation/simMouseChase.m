@@ -7,6 +7,11 @@ global SIM
 SIM = struct('time', 0, 'released', 0);
 SIM.queue = struct('Type', {}, 'Keycode', {}, 'X', {}, 'Y', {}, 'Valuators', {}, 'Time', {});
 rng(1);
+% Debug switches read by MouseChaseDemo: log the bug position as an event
+% (so this script can follow it) and save the session log to a temp folder
+setenv('MOUSECHASE_DEBUG_EVENTS', '1');
+logDir = tempname; mkdir(logDir);
+setenv('MOUSECHASE_LOG_DIR', logDir);
 
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
@@ -125,9 +130,18 @@ for f = fieldnames(events)'
   end
 end
 L = logs(events);
-fprintf('Saved events OK: bugValues %s, touchesValues %s %s, touchEventsValues %s, environmentValues %s\n', ...
-  mat2str(size(L.bugValues)), class(L.touchesValues), mat2str(size(L.touchesValues)), ...
-  mat2str(size(L.touchEventsValues)), L.environmentValues);
+fprintf('Saved events OK: %s\n', strjoin(fieldnames(L)', ', '));
+% The task's own log, saved by finishSession at expStop
+f = dir(fullfile(logDir, '*_MouseChase.mat'));
+if isempty(f)
+  fprintf('Session log NOT saved\n');
+else
+  mc = load(fullfile(logDir, f(1).name));
+  mc = mc.mouseChase;
+  fprintf('Session log %s: bug %s, touchEvents %s, catchLog %s (rewarded %s), environment %s\n', ...
+    f(1).name, mat2str(size(mc.bug)), mat2str(size(mc.touchEvents)), ...
+    mat2str(size(mc.catchLog)), mat2str(mc.catchLog(:,4)'), mc.environment.id);
+end
 % mc shows every event value with toStr; it must not fail
 for f = fieldnames(events)'
   v = events.(f{1}).Node.CurrValue;
@@ -139,6 +153,8 @@ for f = fieldnames(events)'
 end
 sender.close();
 setenv('MOUSECHASE_TOUCH_PORT', '');
+setenv('MOUSECHASE_DEBUG_EVENTS', '');
+setenv('MOUSECHASE_LOG_DIR', '');
 delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
 
   function step()

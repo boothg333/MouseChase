@@ -26,15 +26,21 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   Environments (floor and hiding objects) are loaded by name from the
 %   MouseChaseEnvironments folder next to this file; see loadEnvironment.
 %
-%   Logged events (besides Rigbox's own):
-%     bug          [x y heading hidden alive]' every update (cm, rad); saved
-%                  as a 5 x nUpdates matrix
-%     touches      .contacts: N x 8 [id x y w h vx vy age] active contacts
-%                  (cm, cm/s, s); saved as a struct array, one per update
-%     touchEvents  .events: M x 7 [type id x y w h time] raw touch events
-%                  (type 2 begin, 3 move, 4 end, 5 all touches lost)
+%   Events (in the block file, and shown live in mc; kept low-rate, as
+%   Rigbox sends every event update to mc):
 %     catches      catch count, updating at each catch
 %     rewarded     at each catch: true if it was rewarded
+%     evading      true while the bug is fleeing
+%     environment  name of the environment
+%
+%   High-rate data is logged by the task itself and saved at the end of the
+%   session next to the block file, as <expRef>_MouseChase.mat (variable
+%   'mouseChase'), with times on the same clock as the block's events:
+%     bug          [time x y heading hidden alive] every update (s, cm, rad)
+%     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
+%                  3 move, 4 end; cm, s)
+%     catchLog     [time x y rewarded] at each catch
+%     plus the environment, screen geometry and the final parameters.
 
 %% Shared, mutable context (touch queue, screen geometry)
 % A containers.Map is a handle object, so the callbacks below all see and
@@ -52,7 +58,7 @@ ctx('readerScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'touch
 gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
   'visualRange', 'threatSpeed', 'landingThreatTime', 'obstacleRange', ...
   'escapeGain', 'maxEscapeThrust', 'wanderThrust', 'wanderNoise', ...
-  'friction', 'maxTurnRate', 'creviceDepth', 'showTouches'};
+  'friction', 'maxTurnRate', 'creviceDepth', 'showTouches', 'startDelay'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -90,23 +96,17 @@ events.totalReward = outputs.reward.scan(@plus, 0);
 elapsed = t - t.at(events.expStart);
 stop = (state.catchCount >= p.targetCatches) | (elapsed >= p.maxDuration);
 events.expStop = stop.skipRepeats().then(true);
-% Hand the touch device back when the session ends (it is also reset at
-% the start of the next session, in case this never runs)
-events.touchReleased = events.expStop.map(@(~) releaseTouch(ctx));
+% At the end (also when mc's End button is used: Rigbox then sets this same
+% stop signal), stop the touch reader and save the task's own log. The
+% expStart value is the experiment reference.
+events.sessionSaved = events.expStop.map2(events.expStart, @(~, ref) finishSession(ctx, ref));
 
-%% Logging
-% Rigbox saves an event's values side by side ([log.value]), so values
-% must keep the same number of rows: the bug state is a column, and the
-% touch matrices (one row per contact) are put in a struct field. (Not a
-% cell: the logger's struct('value', v) strips cell braces, and mc's
-% toStr can't display cells.)
-events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]');
-events.touches = state.contacts.skipRepeats().map(@(c) struct('contacts', c));
-touchEvents = state.touchEvents;
-events.touchEvents = touchEvents.keepWhen(touchEvents.map(@(e) ~isempty(e))) ...
-  .map(@(e) struct('events', e));
+%% Events (low-rate: every event update is also sent to mc)
 events.evading = state.evading.skipRepeats();
 events.environment = env.map(@(e) e.id);
+if ~isempty(getenv('MOUSECHASE_DEBUG_EVENTS')) % tools/simulation only
+  events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]');
+end
 
 %% Visual stimuli
 % Signals draws layers in alphabetical order of their names, hence the
@@ -122,7 +122,10 @@ floorImg.altitude = 0;
 floorImg.show = true;
 visStim.a_floor = floorImg;
 
-bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).subscriptable();
+% skipRepeats: while the bug can't be seen its drawing stays the same, so
+% Rigbox doesn't redraw (e.g. during the respawn delay, when trial changes
+% and reward delivery keep the PC busy)
+bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats().subscriptable();
 bug = vis.patch(t, 'circle');
 bug.azimuth = bugDraw.azimuth;
 bug.altitude = bugDraw.altitude;
@@ -193,6 +196,7 @@ try
   p.creviceDepth = 4.5;      % cm the bug may go past the screen edge
   p.showTouches = false;     % draw red markers on active contacts (costly: checks only)
   p.updateRate = 30;         % game/screen updates per second (60 = every frame)
+  p.startDelay = 3;          % s before the bug first appears (while things start up)
 catch
 end
 end
@@ -200,11 +204,17 @@ end
 %% ===================== Game logic =====================
 
 function s = updateGame(s, tNow, P, env, ctx)
-%UPDATEGAME Advance the bug by one Signals update.
+%UPDATEGAME Advance the game by one Signals update and log it.
+s = stepGame(s, tNow, P, env, ctx);
+logUpdate(ctx, s, P, env);
+end
+
+function s = stepGame(s, tNow, P, env, ctx)
+%STEPGAME Advance the bug by one Signals update.
 g = geometry(ctx);
-if isempty(s.t) % first update: start with the bug entering from an edge
+if isempty(s.t) % first update: the bug enters after p.startDelay
   s.t = tNow;
-  s = spawnBug(s, g, P);
+  s.respawnAt = tNow + P.startDelay;
 end
 dt = min(max(tNow - s.t, 0), 0.1); % cap to avoid jumps after a stall
 s.t = tNow;
@@ -291,6 +301,82 @@ if ~s.hidden && nC > 0 && any(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.c
   s.alive = false;
   s.evading = false;
   s.respawnAt = tNow + P.respawnDelay;
+end
+end
+
+%% ===================== Session log =====================
+% High-rate data stays out of Rigbox's events (each event update is sent to
+% mc, which costs time during the session) and is saved by finishSession.
+
+function logUpdate(ctx, s, P, env)
+appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive]);
+if ~isempty(s.touchEvents); appendLog(ctx, 'logTouch', s.touchEvents); end
+if ~isKey(ctx, 'catchesLogged'); ctx('catchesLogged') = 0; end
+if s.catchCount > ctx('catchesLogged')
+  appendLog(ctx, 'logCatch', [s.t s.pos s.lastCatchRewarded]);
+  ctx('catchesLogged') = s.catchCount;
+end
+ctx('env') = env;
+ctx('params') = P; %#ok<NASGU> ctx is a handle (containers.Map)
+end
+
+function appendLog(ctx, name, rows)
+%APPENDLOG Add rows to a log kept in ctx, in chunks (cheap appending).
+chunk = 512;
+if isKey(ctx, name)
+  L = ctx(name);
+else
+  L = struct('done', {{}}, 'cur', zeros(chunk, size(rows, 2)), 'n', 0);
+end
+if L.n + size(rows, 1) > size(L.cur, 1)
+  L.done{end+1} = L.cur(1:L.n,:);
+  L.cur = zeros(max(chunk, size(rows, 1)), size(rows, 2));
+  L.n = 0;
+end
+L.cur(L.n+1:L.n+size(rows, 1),:) = rows;
+L.n = L.n + size(rows, 1);
+ctx(name) = L; %#ok<NASGU>
+end
+
+function data = getLog(ctx, name, nCols)
+if ~isKey(ctx, name); data = zeros(0, nCols); return; end
+L = ctx(name);
+data = vertcat(L.done{:}, L.cur(1:L.n,:));
+end
+
+function ok = finishSession(ctx, ref)
+%FINISHSESSION Stop the touch reader and save the task's log next to the
+%   block file, as <expRef>_MouseChase.mat.
+ok = true;
+releaseTouch(ctx);
+mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
+  'bug', getLog(ctx, 'logBug', 6), ...
+  'bugColumns', {{'time', 'x', 'y', 'heading', 'hidden', 'alive'}}, ...
+  'touchEvents', getLog(ctx, 'logTouch', 7), ...
+  'touchEventColumns', {{'type', 'id', 'x', 'y', 'w', 'h', 'time'}}, ...
+  'catchLog', getLog(ctx, 'logCatch', 4), ...
+  'catchColumns', {{'time', 'x', 'y', 'rewarded'}}, ...
+  'environment', [], 'params', [], 'geometry', geometry(ctx));
+if isKey(ctx, 'env'); mouseChase.environment = ctx('env'); end
+if isKey(ctx, 'params'); mouseChase.params = ctx('params'); end
+dirs = getenv('MOUSECHASE_LOG_DIR'); % set by tools/simulation
+if isempty(dirs)
+  try
+    dirs = dat.expPath(ref, 'main'); % local and server experiment folders
+  catch ex
+    warning('MouseChase:logNotSaved', 'No experiment folder for "%s": %s', ref, ex.message);
+    return
+  end
+end
+for d = cellstr(dirs)
+  f = fullfile(d{1}, [ref '_MouseChase.mat']);
+  try
+    if ~exist(d{1}, 'dir'); mkdir(d{1}); end
+    save(f, 'mouseChase');
+    fprintf('MouseChase log saved to %s\n', f);
+  catch ex
+    warning('MouseChase:logNotSaved', 'Could not save %s: %s', f, ex.message);
+  end
 end
 end
 
@@ -541,10 +627,18 @@ end
 
 function d = bugToDraw(s, P, ctx)
 g = geometry(ctx);
+% Out of sight (respawning, or wholly beyond the screen edge): a constant
+% hidden layer, so nothing needs redrawing
+visible = s.alive && all(abs(s.pos) <= g.dimsCm / 2 + P.bugLength / 2);
+if ~visible
+  d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, ...
+    'dims', [1; 1], 'show', false);
+  return
+end
 d.orientation = mod(s.heading * 180 / pi, 360);
 [d.azimuth, d.altitude, k] = patchPosition(s.pos, d.orientation, g);
 d.dims = k * [P.bugLength; P.bugWidth];
-d.show = s.alive;
+d.show = true;
 end
 
 function d = floorToDraw(env, ctx)
