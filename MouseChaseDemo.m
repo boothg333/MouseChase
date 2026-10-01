@@ -133,7 +133,7 @@ objDraw = env.map(@(e) objectsToDraw(e, nPool, ctx));
 shapes = {'rectangle', 'circle'};
 for iShape = 1:2
   for k = 1:nPool
-    o = objDraw.map(@(d) d(iShape, k)).subscriptable();
+    o = objDraw.map(@(d) d(iShape, k)).skipRepeats().subscriptable();
     obj = vis.patch(t, shapes{iShape});
     obj.azimuth = o.azimuth;
     obj.altitude = o.altitude;
@@ -147,9 +147,12 @@ end
 
 % Touch markers, for checking that drawn positions line up with touches
 nMarkers = 10;
-markerDraw = state.map2(p, @(s, P) touchesToDraw(s, P, nMarkers, ctx));
+% Only computed while p.showTouches is on: the markers cost time every frame
+markerDraw = state.keepWhen(p.showTouches).map2(p, @(s, P) touchesToDraw(s, P, nMarkers, ctx));
 for k = 1:nMarkers
-  m = markerDraw.map(@(d) d(k)).subscriptable();
+  % skipRepeats: an unchanged (e.g. hidden) marker must not trigger the
+  % costly layer update every frame
+  m = markerDraw.map(@(d) d(k)).skipRepeats().subscriptable();
   marker = vis.patch(t, 'circle');
   marker.azimuth = m.azimuth;
   marker.altitude = m.altitude;
