@@ -12,6 +12,8 @@ function bandTestRigbox(phaseSecs, windowRect, phasesToRun)
 %     7  as 5 + drawnow every frame (Rigbox's loop lets MATLAB repaint)
 %     8  as 7 + printing to the command window every frame
 %     9  as 8 with the MATLAB window minimised
+%    10  as 5 + heavy processor load each frame (~10 ms), frames still on time
+%    11  as 5 + so much load that frames are late (~25 ms per frame)
 %   Watch the top of the touchscreen and note in which phases the band
 %   appears. Run on POPPY-STIM with srv.expServer closed; any key aborts.
 %   BANDTESTRIGBOX(PHASESECS, WINDOWRECT, PHASESTORUN) changes the phase
@@ -20,10 +22,12 @@ function bandTestRigbox(phaseSecs, windowRect, phasesToRun)
 
 if nargin < 1 || isempty(phaseSecs); phaseSecs = 8; end
 if nargin < 2; windowRect = []; end
-if nargin < 3 || isempty(phasesToRun); phasesToRun = 1:9; end
+if nargin < 3 || isempty(phasesToRun); phasesToRun = 1:11; end
 phases = {'1 static floor + rock', '2 moving bug', '3 bug + rock + re-uploaded floor', ...
   '4 + flickering sync square', '5 + async flips (like Rigbox)', '6 as 5, floor uploaded once', ...
-  '7 as 5 + MATLAB repaints', '8 as 7 + command window output', '9 as 8, MATLAB minimised'};
+  '7 as 5 + MATLAB repaints', '8 as 7 + command window output', '9 as 8, MATLAB minimised', ...
+  '10 as 5 + heavy CPU load, frames on time', '11 as 5 + heavy CPU load, frames late'};
+loadSecs = [zeros(1, 9), 0.010, 0.025]; % busy time per frame for each phase
 desktop = [];
 try desktop = com.mathworks.mde.desk.MLDesktop.getInstance.getMainFrame; catch; end
 syncRect = [1180 924 1280 1024]; % rig.stimWindow.SyncBounds on POPPY-STIM
@@ -87,8 +91,15 @@ try
       else
         Screen('Flip', win);
       end
-      if k >= 7; drawnow; end
-      if k >= 8; fprintf('frame %d\n', frame); end
+      if any(k == 7:9); drawnow; end
+      if any(k == 8:9); fprintf('frame %d\n', frame); end
+      if loadSecs(k) > 0 % keep all cores busy, like a busy experiment loop
+        tLoad = GetSecs + loadSecs(k);
+        M = rand(300);
+        while GetSecs < tLoad
+          M = M * M'; M = M / norm(M);
+        end
+      end
       drawnOnce = true;
     end
   end
