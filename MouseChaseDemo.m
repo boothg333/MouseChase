@@ -62,9 +62,13 @@ for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 env = events.expStart.map2(p.environment.skipRepeats(), ...
   @(~, id) loadEnvironment(id, envDir));
 
-%% Game state, advanced at every Signals update after experiment start
+%% Game state, advanced p.updateRate times per second after experiment start
+% Every update recomputes the scene and makes Rigbox redraw; updating less
+% often than the screen refreshes leaves more time per update, so frames
+% aren't late (late frames show as a flickering band at the top)
 running = events.expStart.then(true);
-tRun = t.keepWhen(running);
+tick = t.map2(p.updateRate, @(x, rate) floor(x * rate)).skipRepeats();
+tRun = t.at(tick).keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
   'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
@@ -185,7 +189,8 @@ try
   p.friction = 6;            % 1/s
   p.maxTurnRate = 8;         % rad/s
   p.creviceDepth = 4.5;      % cm the bug may go past the screen edge
-  p.showTouches = false;     % draw red markers on active contacts
+  p.showTouches = false;     % draw red markers on active contacts (costly: checks only)
+  p.updateRate = 30;         % game/screen updates per second (60 = every frame)
 catch
 end
 end

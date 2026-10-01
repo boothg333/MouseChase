@@ -12,6 +12,7 @@ pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
 pars.targetCatches = 3; % keep it quick
 pars.rewardProbability = 0.5;
+pars.updateRate = 60; % one game update per simulated frame (the checks assume it)
 
 net = sig.Net;
 clk = @() SIM.time;
