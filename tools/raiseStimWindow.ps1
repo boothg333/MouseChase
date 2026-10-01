@@ -16,7 +16,7 @@
   From MATLAB: builtin('system', sprintf('powershell -NoProfile -ExecutionPolicy Bypass -File "%s" -ProcessId %d', f, feature('getpid')))
 #>
 param([Parameter(Mandatory = $true)][int]$ProcessId, [switch]$ReportOnly, [switch]$Release,
-  [int]$Retries = 1, [string]$LogFile = '')
+  [int]$Retries = 1, [string]$LogFile = '', [switch]$HidePsychHid, [switch]$AlsoRaisePsychHid)
 
 Add-Type -TypeDefinition @'
 using System;
@@ -56,6 +56,16 @@ function Invoke-Pass {
     $isStim = $title -like 'PTB Onscreen window*'
     if ($ReportOnly -or $title -like 'PTB*' -or $title -like 'MATLAB*') {
       "window '{0}': visible={1} minimised={2}" -f $title, [StimWin]::IsWindowVisible($h), [StimWin]::IsIconic($h)
+    }
+    if ($title -like 'PTB-PsychHID*' -and -not $ReportOnly) {
+      if ($HidePsychHid) {
+        [void][StimWin]::ShowWindow($h, 0)                                  # SW_HIDE
+        "  -> PsychHID window hidden; now visible={0}" -f [StimWin]::IsWindowVisible($h)
+      } elseif ($AlsoRaisePsychHid) {
+        [void][StimWin]::ShowWindow($h, 9)
+        [void][StimWin]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x0013)
+        "  -> PsychHID window raised, foreground={0}" -f [StimWin]::SetForegroundWindow($h)
+      }
     }
     if (-not $isStim -or $ReportOnly) { continue }
     $ptb++
