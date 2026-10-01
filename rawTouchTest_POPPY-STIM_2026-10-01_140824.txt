@@ -1,0 +1,8 @@
+Raw touch test on POPPY-STIM, 2026-10-01 14:08:24
+Phase 1 (own window in front):   278 reports (278 received in background mode)
+Phase 2 (other window in front): 640 reports (640 received in background mode)
+Max contact count reported: 5; max fingers down in one report: 5
+Contact IDs seen with finger down: 1, 2, 3, 4, 5
+Devices:
+  \\?\HID#VID_1FF7&PID_0008&MI_00&Col01#7&2cd34e31&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}
+    usage page 0x0D usage 0x04, input report 62 bytes, 8 link collections, X: logical 0..32767, physical 0..0 (units 0x0, exp 0), Y: logical 0..32767, physical 0..0 (units 0x0, exp 0)
