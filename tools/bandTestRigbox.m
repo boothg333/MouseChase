@@ -1,4 +1,4 @@
-function bandTestRigbox(phaseSecs, windowRect)
+function bandTestRigbox(phaseSecs, windowRect, phasesToRun)
 %BANDTESTRIGBOX Like bandTest, but drawing with Rigbox's own renderer.
 %   Draws a MouseChase-like scene with vis.init/vis.draw (Rigbox's OpenGL
 %   sphere renderer), 8 s per phase, phase number written in the middle:
@@ -9,15 +9,23 @@ function bandTestRigbox(phaseSecs, windowRect)
 %     4  as 3 + photodiode square flickering every frame
 %     5  as 4 with asynchronous flips (exactly how Rigbox updates)
 %     6  as 5 but the floor texture uploaded once (not every frame)
+%     7  as 5 + drawnow every frame (Rigbox's loop lets MATLAB repaint)
+%     8  as 7 + printing to the command window every frame
+%     9  as 8 with the MATLAB window minimised
 %   Watch the top of the touchscreen and note in which phases the band
 %   appears. Run on POPPY-STIM with srv.expServer closed; any key aborts.
-%   BANDTESTRIGBOX(PHASESECS, WINDOWRECT) changes the phase duration and
-%   opens a window of that size instead of full screen (for testing).
+%   BANDTESTRIGBOX(PHASESECS, WINDOWRECT, PHASESTORUN) changes the phase
+%   duration, opens a window of that size instead of full screen (for
+%   testing), and runs only the listed phases, e.g. bandTestRigbox([], [], 5:9).
 
 if nargin < 1 || isempty(phaseSecs); phaseSecs = 8; end
 if nargin < 2; windowRect = []; end
+if nargin < 3 || isempty(phasesToRun); phasesToRun = 1:9; end
 phases = {'1 static floor + rock', '2 moving bug', '3 bug + rock + re-uploaded floor', ...
-  '4 + flickering sync square', '5 + async flips (like Rigbox)', '6 as 5, floor uploaded once'};
+  '4 + flickering sync square', '5 + async flips (like Rigbox)', '6 as 5, floor uploaded once', ...
+  '7 as 5 + MATLAB repaints', '8 as 7 + command window output', '9 as 8, MATLAB minimised'};
+desktop = [];
+try desktop = com.mathworks.mde.desk.MLDesktop.getInstance.getMainFrame; catch; end
 syncRect = [1180 924 1280 1024]; % rig.stimWindow.SyncBounds on POPPY-STIM
 degPerCm = 180 / pi / 100;       % at the 100 cm viewing distance
 
@@ -47,8 +55,9 @@ try
 
   asyncPending = false;
   frame = 0;
-  for k = 1:numel(phases)
+  for k = phasesToRun
     fprintf('%s  phase %s\n', datestr(now, 'HH:MM:SS'), phases{k});
+    if k == 9 && ~isempty(desktop); desktop.setState(java.awt.Frame.ICONIFIED); end
     floorLayer.textureId = iff(k == 6, 'floorStatic', '~floor'); % '~' = reload every draw
     tEnd = GetSecs + phaseSecs;
     drawnOnce = false;
@@ -78,12 +87,16 @@ try
       else
         Screen('Flip', win);
       end
+      if k >= 7; drawnow; end
+      if k >= 8; fprintf('frame %d\n', frame); end
       drawnOnce = true;
     end
   end
+  if ~isempty(desktop); desktop.setState(java.awt.Frame.NORMAL); end
   if asyncPending; Screen('AsyncFlipEnd', win); end
 catch ex
   disp(getReport(ex, 'extended', 'hyperlinks', 'off'));
 end
+if ~isempty(desktop); try desktop.setState(java.awt.Frame.NORMAL); catch; end; end
 sca;
 end
