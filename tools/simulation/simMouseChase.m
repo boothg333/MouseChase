@@ -47,7 +47,7 @@ dt = 1/60;
 B = zeros(0, 5);
 for k = 1:round(20 / dt)
   step();
-  B(end+1,:) = events.bug.Node.CurrValue; %#ok<AGROW>
+  B(end+1,:) = events.bug.Node.CurrValue'; % column -> row %#ok<AGROW>
 end
 fprintf('Wander: x in [%.1f %.1f], y in [%.1f %.1f] cm, visible %.0f%% of frames, alive all: %d\n', ...
   min(B(:,1)), max(B(:,1)), min(B(:,2)), max(B(:,2)), 100 * mean(~B(:,4)), all(B(:,5)));
@@ -57,15 +57,15 @@ checkVisual();
 
 %% 2. A moving touch approaching the visible bug makes it flee
 waitVisible();
-b = events.bug.Node.CurrValue;
+b = events.bug.Node.CurrValue'; % column -> row
 start = b(1:2) + [6 0];
 touch(2, 7, start);
 evading = false; spd = [];
 for k = 1:30
-  prev = events.bug.Node.CurrValue;
+  prev = events.bug.Node.CurrValue'; % column -> row
   touch(3, 7, start - [k * 0.3, 0]); % 18 cm/s towards the bug
   step();
-  now = events.bug.Node.CurrValue;
+  now = events.bug.Node.CurrValue'; % column -> row
   spd(end+1) = hypot(now(1) - prev(1), now(2) - prev(2)) / dt; %#ok<AGROW>
   evading = evading || isequal(events.evading.Node.CurrValue, true);
 end
@@ -80,7 +80,7 @@ post(p, fast);
 B = zeros(0, 5);
 for k = 1:round(10 / dt)
   step();
-  B(end+1,:) = events.bug.Node.CurrValue; %#ok<AGROW>
+  B(end+1,:) = events.bug.Node.CurrValue'; % column -> row %#ok<AGROW>
 end
 sp = hypot(diff(B(:,1)), diff(B(:,2))) / dt;
 fprintf('Trial params: wanderThrust %g -> %g, median wander speed now %.1f cm/s\n', ...
@@ -89,20 +89,20 @@ fprintf('Trial params: wanderThrust %g -> %g, median wander speed now %.1f cm/s\
 %% 4. A still touch landing on the visible bug catches it
 for c = 1:pars.targetCatches
   waitVisible();
-  b = events.bug.Node.CurrValue;
+  b = events.bug.Node.CurrValue'; % column -> row
   touch(2, 20 + c, b(1:2));
   step();
   touch(4, 20 + c, b(1:2));
   step();
-  a = events.bug.Node.CurrValue;
+  a = events.bug.Node.CurrValue'; % column -> row
   if c == 1
     fprintf('Catch 1: catches=%s rewarded=%s reward=%s alive after=%d\n', ...
       mat2str(catches), mat2str(rewardedFlags), mat2str(rewards), a(5));
     for k = 1:round(1.5 / dt); step(); end
-    a = events.bug.Node.CurrValue;
+    a = events.bug.Node.CurrValue'; % column -> row
     fprintf('        alive 1.5 s later: %d', a(5));
     for k = 1:round(1 / dt); step(); end
-    a = events.bug.Node.CurrValue;
+    a = events.bug.Node.CurrValue'; % column -> row
     fprintf(', 2.5 s later: %d\n', a(5));
   end
 end
@@ -110,6 +110,23 @@ fprintf('%d catches, %d rewarded (p = %g), %d reward outputs totalling %g ul; re
   numel(catches), sum(rewardedFlags), pars.rewardProbability, numel(rewards), sum(rewards), ...
   sum(rewardedFlags) == numel(rewards) && numel(rewardedFlags) == numel(catches));
 fprintf('expStop after target: %d\n', stopped);
+% Rigbox saves events with sig.Registry/logs at the end; it must not fail
+warning('off', 'MATLAB:structOnObject');
+raw = struct(events); % StructRef hides its properties from dot indexing
+entryLogs = raw.EntryLogs;
+for f = fieldnames(events)'
+  lg = entryLogs.(f{1}).Node.CurrValue;
+  try
+    [lg.value]; %#ok<VUNUS>
+  catch
+    fprintf('Event %s cannot be saved; value sizes: %s\n', f{1}, ...
+      strjoin(unique(arrayfun(@(l) mat2str(size(l.value)), lg, 'UniformOutput', false)), ' '));
+  end
+end
+L = logs(events);
+fprintf('Saved events OK: bugValues %s, touchesValues %s, touchEventsValues %s, environmentValues %s\n', ...
+  mat2str(size(L.bugValues)), class(L.touchesValues), mat2str(size(L.touchEventsValues)), ...
+  strjoin(L.environmentValues, ','));
 sender.close();
 setenv('MOUSECHASE_TOUCH_PORT', '');
 delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
@@ -128,7 +145,7 @@ delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicit
   end
   function waitVisible()
     for kk = 1:round(60 / dt)
-      v = events.bug.Node.CurrValue;
+      v = events.bug.Node.CurrValue'; % column -> row
       if ~v(4) && v(5) && all(abs(v(1:2)) < dims / 2 - 3); return; end
       step();
     end

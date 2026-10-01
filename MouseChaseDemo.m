@@ -27,9 +27,11 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   MouseChaseEnvironments folder next to this file; see loadEnvironment.
 %
 %   Logged events (besides Rigbox's own):
-%     bug          [x y heading hidden alive] every update (cm, rad)
-%     touches      N x 8 [id x y w h vx vy age] active contacts (cm, cm/s, s)
-%     touchEvents  M x 7 [type id x y w h time] raw touch events
+%     bug          [x y heading hidden alive]' every update (cm, rad); saved
+%                  as a 5 x nUpdates matrix
+%     touches      {N x 8 [id x y w h vx vy age]} active contacts (cm, cm/s,
+%                  s); one cell per update
+%     touchEvents  {M x 7 [type id x y w h time]} raw touch events
 %                  (type 2 begin, 3 move, 4 end, 5 all touches lost)
 %     catches      catch count, updating at each catch
 %     rewarded     at each catch: true if it was rewarded
@@ -89,12 +91,16 @@ events.expStop = stop.skipRepeats().then(true);
 events.touchReleased = events.expStop.map(@(~) releaseTouch(ctx));
 
 %% Logging
-events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]);
-events.touches = state.contacts.skipRepeats();
+% Rigbox saves an event's values side by side ([log.value]), so values
+% must keep the same number of rows: the bug state is a column, and the
+% touch matrices (one row per contact) are wrapped in cells. Doubly: the
+% logger stores values with struct('value', v), which strips one layer.
+events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]');
+events.touches = state.contacts.skipRepeats().map(@(c) {{c}});
 touchEvents = state.touchEvents;
-events.touchEvents = touchEvents.keepWhen(touchEvents.map(@(e) ~isempty(e)));
+events.touchEvents = touchEvents.keepWhen(touchEvents.map(@(e) ~isempty(e))).map(@(e) {{e}});
 events.evading = state.evading.skipRepeats();
-events.environment = env.map(@(e) e.id);
+events.environment = env.map(@(e) {{e.id}});
 
 %% Visual stimuli
 % Signals draws layers in alphabetical order of their names, hence the
