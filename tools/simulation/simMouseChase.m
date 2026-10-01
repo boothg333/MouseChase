@@ -125,9 +125,18 @@ for f = fieldnames(events)'
   end
 end
 L = logs(events);
-fprintf('Saved events OK: bugValues %s, touchesValues %s, touchEventsValues %s, environmentValues %s\n', ...
-  mat2str(size(L.bugValues)), class(L.touchesValues), mat2str(size(L.touchEventsValues)), ...
-  strjoin(L.environmentValues, ','));
+fprintf('Saved events OK: bugValues %s, touchesValues %s %s, touchEventsValues %s, environmentValues %s\n', ...
+  mat2str(size(L.bugValues)), class(L.touchesValues), mat2str(size(L.touchesValues)), ...
+  mat2str(size(L.touchEventsValues)), L.environmentValues);
+% mc shows every event value with toStr; it must not fail
+for f = fieldnames(events)'
+  v = events.(f{1}).Node.CurrValue;
+  try
+    toStr(v);
+  catch ex
+    fprintf('mc cannot display %s: %s\n', f{1}, ex.message);
+  end
+end
 sender.close();
 setenv('MOUSECHASE_TOUCH_PORT', '');
 delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
