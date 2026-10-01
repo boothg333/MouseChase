@@ -2,7 +2,8 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %MOUSECHASEDEMO Signals experiment definition: a mouse chases a virtual bug.
 %   A bug wanders over a touchscreen floor, hides under objects and flees
 %   from moving touches. Touches come from the multi-touch overlay (paws,
-%   tail), read with the Psychtoolbox TouchQueue (Psychtoolbox >= 3.0.16).
+%   tail), read by tools/touchReader.ps1 in the background (Windows raw
+%   input, no Psychtoolbox touch support needed).
 %   When any contact lands within p.catchRadius of the visible bug, the
 %   trial ends, a reward of p.rewardSize ul is delivered with probability
 %   p.rewardProbability, and the bug respawns from the screen edge after
@@ -41,7 +42,7 @@ ctx = containers.Map();
 % Resolve file locations now: Rigbox removes this folder from the path once
 % the definition has run, so they can't be found from the callbacks later
 envDir = fullfile(fileparts(mfilename('fullpath')), 'MouseChaseEnvironments');
-ctx('raiseScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'raiseStimWindow.ps1');
+ctx('readerScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'touchReader.ps1');
 
 %% Parameters
 % The game functions receive the whole parameter struct, but mc only lists
@@ -324,49 +325,75 @@ inside = pos(1) >= rect(1) - margin && pos(1) <= rect(3) + margin && ...
 end
 
 %% ===================== Touch input =====================
+% Touches come from tools/touchReader.ps1, a hidden background process that
+% reads the overlay through Windows raw input and sends every HID report to
+% a UDP port here. (Psychtoolbox's TouchQueue isn't usable on this Windows
+% 11 rig: it covers the stimulus window with a window of its own.)
 
 function [contacts, raw] = pollTouches(ctx)
-%POLLTOUCHES Read all touch events since the last call.
+%POLLTOUCHES Read all touch reports since the last call.
 %   contacts: N x 8 [id x y w h vx vy age] of the contacts currently down
-%   raw: M x 7 [type id x y w h time] events read in this call
-%   Positions in cm; falls back to the mouse pointer (id 0, while a button
-%   is down) if no touchscreen is available, e.g. for desk testing.
+%   raw: M x 7 [type id x y w h time] touch events derived from the reports
+%     (type 2 begin, 3 move, 4 end); positions in cm, time in GetSecs
 contacts = zeros(0, 8);
 raw = zeros(0, 7);
 if isKey(ctx, 'released'); return; end % session over: ignore input
 if ~isKey(ctx, 'tracks'); openTouch(ctx); end
 g = geometry(ctx);
 tracks = ctx('tracks'); % [id x y w h vx vy tBegin tLast]
-dev = ctx('dev');
-if ~isempty(dev)
-  while TouchEventAvail(dev)
-    evt = TouchEventGet(dev, ctx('win'));
-    xy = px2cm([evt.X evt.Y], g);
-    wh = [0 0];
-    if numel(evt.Valuators) >= 4; wh = evt.Valuators(3:4) .* g.cmPerPx; end
-    id = double(evt.Keycode);
-    raw(end+1,:) = [evt.Type id xy wh evt.Time]; %#ok<AGROW>
-    tracks = updateTrack(tracks, evt.Type, id, xy, wh, evt.Time);
-  end
-else % mouse fallback
-  if isempty(ctx('win'))
-    [mx, my, buttons] = GetMouse();
-  else
-    [mx, my, buttons] = GetMouse(ctx('win'));
-  end
-  wasDown = ~isempty(tracks);
-  isDown = any(buttons);
-  type = 0;
-  if isDown && ~wasDown; type = 2; elseif isDown; type = 3; elseif wasDown; type = 4; end
-  if type
-    xy = px2cm([mx my], g);
-    tNow = GetSecs;
-    raw = [type 0 xy 0 0 tNow];
-    tracks = updateTrack(tracks, type, 0, xy, [0 0], tNow);
-  end
+ch = ctx('channel');
+buf = ctx('buffer');
+while true
+  buf.clear();
+  from = ch.receive(buf);
+  if isempty(from); break; end
+  ctx('readerAddr') = from;
+  bytes = typecast(buf.array(), 'uint8');
+  [tracks, raw] = handleReport(ctx, char(bytes(1:buf.position())'), tracks, raw, g);
 end
+% Drop contacts that stopped reporting (in case a lift report was lost):
+% the overlay reports every contact ~60 times/s, even when it holds still
+tNow = GetSecs;
+stale = tNow - tracks(:,9) > 0.25;
+for i = find(stale)'
+  raw(end+1,:) = [4 tracks(i,1:5) tNow]; %#ok<AGROW>
+end
+tracks(stale,:) = [];
 ctx('tracks') = tracks; %#ok<NASGU> ctx is a handle (containers.Map)
-contacts =[tracks(:,1:7), GetSecs - tracks(:,8)];
+contacts = [tracks(:,1:7), tNow - tracks(:,8)];
+end
+
+function [tracks, raw] = handleReport(ctx, msg, tracks, raw, g)
+%HANDLEREPORT Turn one message from the touch reader into touch events.
+lines = strsplit(strtrim(msg), newline);
+switch strtok(lines{1})
+  case 'HELLO' % 'HELLO <xMax> <yMax>': the overlay's logical coordinate range
+    v = sscanf(lines{1}(6:end), '%f');
+    if numel(v) == 2 && all(v > 0); ctx('logicalMax') = v(:)'; end %#ok<NASGU>
+  case 'R' % 'R <reader time> <contact count>', then 'id tip x y w h' per contact
+    v = sscanf(lines{1}(2:end), '%f');
+    % Reader clock -> GetSecs: the smallest receive delay seen is the offset
+    offset = min(ctx('timeOffset'), GetSecs - v(1));
+    ctx('timeOffset') = offset;
+    time = v(1) + offset;
+    scale = 1 ./ ctx('logicalMax');
+    for k = 2:numel(lines)
+      c = sscanf(lines{k}, '%f')';
+      if numel(c) < 6; continue; end
+      xy = px2cm(c(3:4) .* scale .* g.pxSize, g);
+      wh = c(5:6) .* scale .* g.dimsCm;
+      known = any(tracks(:,1) == c(1));
+      if c(2) % finger down
+        type = 2 + known;
+      elseif known % lifted
+        type = 4;
+      else
+        continue
+      end
+      raw(end+1,:) = [type c(1) xy wh time]; %#ok<AGROW>
+      tracks = updateTrack(tracks, type, c(1), xy, wh, time);
+    end
+end
 end
 
 function tracks = updateTrack(tracks, type, id, xy, wh, time)
@@ -389,69 +416,48 @@ switch type
     tracks(i,2:5) = [xy wh];
   case 4 % touch ends
     if ~isempty(i); tracks(i,:) = []; end
-  case 5 % touch sequence compromised: forget everything
-    tracks = zeros(0, 9);
 end
 end
 
 function openTouch(ctx)
-%OPENTOUCH Start the TouchQueue on the stimulus window, or fall back to mouse.
+%OPENTOUCH Open a local UDP port and start the background touch reader.
 ctx('tracks') = zeros(0, 9);
-wins = Screen('Windows');
-wins = wins(arrayfun(@(w) Screen('WindowKind', w) == 1, wins));
-win = wins(1:min(1, end)); % the stimulus window ([] if none is open)
-ctx('win') = win;
-dev = [];
-try
-  dev = GetTouchDeviceIndices();
-catch
-end
-if isempty(dev)
-  warning('MouseChase:noTouch', ...
-    'No touchscreen found (needs Psychtoolbox >= 3.0.16); using the mouse instead.');
-  ctx('dev') = []; %#ok<NASGU>
+ctx('timeOffset') = inf;
+ctx('logicalMax') = [32767 32767]; % until the reader reports the overlay's range
+ch = java.nio.channels.DatagramChannel.open();
+ch.configureBlocking(false);
+port = str2double(getenv('MOUSECHASE_TOUCH_PORT')); % set by tools/simulation
+startReader = isnan(port);
+if startReader; port = 0; end % any free port
+ch.bind(java.net.InetSocketAddress('127.0.0.1', port));
+ctx('channel') = ch;
+ctx('buffer') = java.nio.ByteBuffer.allocate(8192);
+if ~startReader; return; end
+script = ctx('readerScript');
+if ~ispc || ~exist(script, 'file')
+  warning('MouseChase:noTouch', 'Touch reader %s not found: no touch input.', script);
   return
 end
-dev = dev(1);
-try TouchQueueRelease(dev); catch; end % left over from an aborted session
-TouchQueueCreate(win, dev);
-TouchQueueStart(dev);
-ctx('dev') = dev;
-% On Windows the TouchQueue opens a visible 'PTB-PsychHID' window that
-% covers the stimulus window: put the stimulus window back on top.
-stimWindowOnTop(ctx, true);
-end
-
-function stimWindowOnTop(ctx, onTop)
-%STIMWINDOWONTOP Make the stimulus window topmost (or ordinary again).
-%   Runs tools/raiseStimWindow.ps1 in the background so the game doesn't
-%   stall while PowerShell starts; it logs to C:\LocalExpData.
-if ~ispc; return; end
-script = ctx('raiseScript');
-if ~exist(script, 'file')
-  warning('MouseChase:noRaiseScript', ...
-    '%s not found: the stimulus window may stay hidden behind MATLAB.', script);
-  return
-end
-opt = '-Retries 4';
-if ~onTop; opt = '-Release'; end
-% builtin: a mock system.m may shadow the real one on the rig
+% Hidden and in the background (start /b), so no window appears and the
+% game doesn't wait for PowerShell; builtin because a mock system.m may
+% shadow the real one on the rig
 builtin('system', sprintf(['start "" /b powershell -NoProfile -ExecutionPolicy Bypass ' ...
-  '-WindowStyle Hidden -File "%s" -ProcessId %d -LogFile "%s" %s'], script, ...
-  feature('getpid'), 'C:\LocalExpData\raiseStimWindow.log', opt));
+  '-WindowStyle Hidden -File "%s" -Port %d -ParentPid %d -LogFile "%s"'], script, ...
+  ch.socket().getLocalPort(), feature('getpid'), 'C:\LocalExpData\touchReader.log'));
 end
 
 function ok = releaseTouch(ctx)
+%RELEASETOUCH Stop the touch reader and close the UDP port.
 ok = true;
 ctx('released') = true;
-if isKey(ctx, 'dev') && ~isempty(ctx('dev'))
-  try
-    TouchQueueStop(ctx('dev'));
-    TouchQueueRelease(ctx('dev'));
-  catch
+if ~isKey(ctx, 'channel'); return; end
+ch = ctx('channel');
+try
+  if isKey(ctx, 'readerAddr')
+    ch.send(java.nio.ByteBuffer.wrap(int8('QUIT')), ctx('readerAddr'));
   end
-  ctx('dev') = [];
-  stimWindowOnTop(ctx, false); % so MATLAB can be reached between experiments
+  ch.close();
+catch
 end
 end
 

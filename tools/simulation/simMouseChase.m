@@ -32,6 +32,9 @@ hW = events.rewarded.onValue(@(v) addRewarded(v)); %#ok<NASGU>
 hC = events.catches.onValue(@(v) addCatch(v)); %#ok<NASGU>
 hS = events.expStop.onValue(@(v) setStop()); %#ok<NASGU>
 
+touchPort = 50555; % the task listens here instead of starting tools/touchReader.ps1
+setenv('MOUSECHASE_TOUCH_PORT', num2str(touchPort));
+sender = java.net.DatagramSocket();
 post(p, pars);
 post(t, 0);
 post(events.expStart, 'sim');
@@ -106,7 +109,9 @@ end
 fprintf('%d catches, %d rewarded (p = %g), %d reward outputs totalling %g ul; rewarded events match outputs: %d\n', ...
   numel(catches), sum(rewardedFlags), pars.rewardProbability, numel(rewards), sum(rewards), ...
   sum(rewardedFlags) == numel(rewards) && numel(rewardedFlags) == numel(catches));
-fprintf('expStop after target: %d, touch queue released: %d\n', stopped, SIM.released);
+fprintf('expStop after target: %d\n', stopped);
+sender.close();
+setenv('MOUSECHASE_TOUCH_PORT', '');
 delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicitly
 
   function step()
@@ -114,9 +119,12 @@ delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicit
     post(t, SIM.time);
   end
   function touch(type, id, xy)
-    px = toPx(xy);
-    SIM.queue(end+1) = struct('Type', type, 'Keycode', id, 'X', px(1), 'Y', px(2), ...
-      'Valuators', [px 25 25 0], 'Time', SIM.time);
+    % Send a report like tools/touchReader.ps1 does (type 4 = lifted)
+    L = round(toPx(xy) ./ W * 32767);
+    msg = int8(sprintf('R %.5f 1\n%d %d %d %d 800 800\n', SIM.time, id, type ~= 4, L(1), L(2)));
+    sender.send(java.net.DatagramPacket(msg, numel(msg), ...
+      java.net.InetAddress.getByName('127.0.0.1'), touchPort));
+    pause(0.002);
   end
   function waitVisible()
     for kk = 1:round(60 / dt)

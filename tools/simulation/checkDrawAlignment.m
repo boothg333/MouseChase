@@ -24,6 +24,7 @@ p = net.subscriptableOrigin('pars');
 visual = StructRef;
 expDef = fileFunction(defFile);
 expDef(t, events, p, visual, sig.Registry(clk), sig.Registry(clk), []);
+setenv('MOUSECHASE_TOUCH_PORT', '50556'); % don't start the real touch reader
 post(p, pars); post(t, 0); post(events.expStart, 'sim');
 
 maxPosErr = 0; maxAngErr = 0; n = 0;
