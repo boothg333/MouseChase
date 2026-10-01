@@ -1,0 +1,38 @@
+﻿[
+    {
+        "Path":  "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\EdgeUI",
+        "Name":  "AllowEdgeSwipe",
+        "Desc":  "Edge swipes (notification centre, task view, widgets)",
+        "Previous":  null
+    },
+    {
+        "Path":  "HKCU:\\Software\\Microsoft\\Wisp\\Touch",
+        "Name":  "TouchMode_hold",
+        "Desc":  "Press and hold for right-click",
+        "Previous":  1
+    },
+    {
+        "Path":  "HKCU:\\Control Panel\\Cursors",
+        "Name":  "ContactVisualization",
+        "Desc":  "Touch feedback circles",
+        "Previous":  2
+    },
+    {
+        "Path":  "HKCU:\\Control Panel\\Cursors",
+        "Name":  "GestureVisualization",
+        "Desc":  "Gesture feedback",
+        "Previous":  31
+    },
+    {
+        "Path":  "HKCU:\\Software\\Microsoft\\TabletTip\\1.7",
+        "Name":  "EnableDesktopModeAutoInvoke",
+        "Desc":  "Touch keyboard popping up",
+        "Previous":  null
+    },
+    {
+        "Path":  "HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsInkWorkspace",
+        "Name":  "AllowWindowsInkWorkspace",
+        "Desc":  "Windows Ink Workspace",
+        "Previous":  null
+    }
+]

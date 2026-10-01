@@ -1,0 +1,33 @@
+﻿{
+    "Registry":  [
+                     {
+                         "Path":  "HKCU:\\Software\\Microsoft\\DirectX\\UserGpuPreferences",
+                         "Name":  "DirectXUserGlobalSettings",
+                         "Type":  "String",
+                         "Desc":  "Optimisations for windowed games",
+                         "Previous":  null
+                     },
+                     {
+                         "Path":  "HKCU:\\Software\\Microsoft\\GameBar",
+                         "Name":  "AutoGameModeEnabled",
+                         "Type":  "DWord",
+                         "Desc":  "Game Mode",
+                         "Previous":  null
+                     },
+                     {
+                         "Path":  "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+                         "Name":  "HwSchMode",
+                         "Type":  "DWord",
+                         "Desc":  "Hardware-accelerated GPU scheduling (1 = off)",
+                         "Previous":  null
+                     },
+                     {
+                         "Path":  "HKLM:\\SOFTWARE\\Microsoft\\Windows\\Dwm",
+                         "Name":  "OverlayTestMode",
+                         "Type":  "DWord",
+                         "Desc":  "Multiplane overlays (5 = off)",
+                         "Previous":  null
+                     }
+                 ],
+    "PowerScheme":  "381b4222-f694-41f0-9685-ff5bb260df2e"
+}
