@@ -1,0 +1,61 @@
+function e = configureSignalsExperiment(paramStruct, rig)
+%exp.configureSignalsExperiment Setup Signals Experiment class (rig override)
+%   Rig-specific override of Rigbox's exp.configureSignalsExperiment, kept
+%   in Documents\MATLAB\+exp so it takes precedence over Rigbox's version.
+%
+%   By default this creates exp.SignalsExpNoVis, which runs Signals
+%   experiments without visual stimuli (the rig used to have no screen; used
+%   e.g. for spontaneousActivity). Experiment definitions listed in
+%   visualExpDefs below draw on the screen, and get the standard
+%   exp.SignalsExp instead, configured as in Rigbox's own version.
+%
+%   Inputs
+%     paramStruct  a SignalsExp parameter structure
+%     rig  a structure of rig hardware objects returned by hw.devices)
+%
+%   Output
+%     e  a SignalsExp object
+%
+%   Example
+%     rig = hw.devices;
+%     rig.stimWindow.open();
+%     pars = exp.inferParameters(@choiceWorld);
+%     e = exp.configureSignalsExperiment(pars, rig);
+%     e.run([]);
+%
+% See also exp.configureFilmExperiment, exp.configureChoiceExperiment
+
+% Experiment definitions (file names without .m) that need visual stimuli
+visualExpDefs = {'MouseChaseDemo'};
+
+defFunction = paramStruct.defFunction;
+if isa(defFunction, 'function_handle'); defFunction = func2str(defFunction); end
+[~, defName] = fileparts(defFunction);
+
+if ~any(strcmp(defName, visualExpDefs))
+  %% Create the experiment object (no visual stimuli)
+  e = exp.SignalsExpNoVis(paramStruct, rig);
+  e.Type = 'signals no vis'; %record the experiment type
+  return
+end
+
+%% Visual experiment, as in Rigbox's exp.configureSignalsExperiment
+% Set the background colour
+if isfield(rig, 'stimWindow') && rig.stimWindow.IsOpen
+  % If the 'bgColour' parameter is defined use that value, otherwise use
+  % the current background colour
+  bgColour = getOr(paramStruct, 'bgColour', rig.stimWindow.BackgroundColour);
+  fullRange = rig.stimWindow.ColourRange;
+  assert(numel(bgColour) < 5, ...
+    'Rigbox:exp:configureSignalsExperiment:bgColourSize', ...
+    'background colour must be 1, 3 or 4 elements and cannot vary by trial')
+  % Normalize by available colour range based on current pixel depth
+  rig.stimWindow.BackgroundColour = (bgColour / 255) * fullRange;
+  paramStruct.bgColour = rig.stimWindow.BackgroundColour(:);
+end
+
+% Create the experiment object
+e = exp.SignalsExp(paramStruct, rig);
+e.Type = paramStruct.type; %record the experiment type
+
+end
