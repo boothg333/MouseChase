@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-  Background touch reader for MouseChaseDemo: reads the multi-touch overlay
+  Background touch reader for MouseChaseTouch: reads the multi-touch overlay
   through Windows raw input and sends every report to MATLAB over UDP.
 
 .DESCRIPTION
   touchReader.ps1 -Port <MATLAB's UDP port> -ParentPid <MATLAB pid> [-LogFile f]
 
-  Started (hidden) by MouseChaseDemo at experiment start. Uses a hidden
+  Started (hidden) by MouseChaseTouch at experiment start. Uses a hidden
   message-only window registered for raw input from touchscreens (HID usage
   page 0x0D, usage 0x04) with RIDEV_INPUTSINK, so it receives touches
   whichever window has focus, without creating any visible window.

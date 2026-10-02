@@ -1,13 +1,13 @@
 function simMouseChase()
-% Headless simulation of MouseChaseDemo with scripted touches.
+% Headless simulation of MouseChaseTouch with scripted touches.
 here = fileparts(mfilename('fullpath'));
 [~, fakeCleanup] = makeFakePtb(); %#ok<ASGLU> removed from the path on return
-defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseDemo.m');
+defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseTouch.m');
 global SIM
 SIM = struct('time', 0, 'released', 0);
 SIM.queue = struct('Type', {}, 'Keycode', {}, 'X', {}, 'Y', {}, 'Valuators', {}, 'Time', {});
 rng(1);
-% Debug switches read by MouseChaseDemo: log the bug position as an event
+% Debug switches read by MouseChaseTouch: log the bug position as an event
 % (so this script can follow it) and save the session log to a temp folder
 setenv('MOUSECHASE_DEBUG_EVENTS', '1');
 logDir = tempname; mkdir(logDir);

@@ -26,7 +26,7 @@ function e = configureSignalsExperiment(paramStruct, rig)
 % See also exp.configureFilmExperiment, exp.configureChoiceExperiment
 
 % Experiment definitions (file names without .m) that need visual stimuli
-visualExpDefs = {'MouseChaseDemo'};
+visualExpDefs = {'MouseChaseTouch'};
 
 defFunction = paramStruct.defFunction;
 if isa(defFunction, 'function_handle'); defFunction = func2str(defFunction); end

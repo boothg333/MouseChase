@@ -1,5 +1,5 @@
-function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
-%MOUSECHASEDEMO Signals experiment definition: a mouse chases a virtual bug.
+function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
+%MOUSECHASETOUCH Signals experiment definition: a mouse chases a virtual bug.
 %   A bug wanders over a touchscreen floor, hides under objects and flees
 %   from moving touches. Touches come from the multi-touch overlay (paws,
 %   tail), read by tools/touchReader.ps1 in the background (Windows raw
@@ -36,7 +36,8 @@ function MouseChaseDemo(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   High-rate data is logged by the task itself and saved at the end of the
 %   session next to the block file, as <expRef>_MouseChase.mat (variable
 %   'mouseChase'), with times on the same clock as the block's events:
-%     bug          [time x y heading hidden alive] every update (s, cm, rad)
+%     bug          [time x y heading hidden alive threatLevel] every update
+%                  (s, cm, rad, 0-1)
 %     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
 %                  3 move, 4 end; cm, s)
 %     catchLog     [time x y rewarded] at each catch
@@ -56,9 +57,10 @@ ctx('readerScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'touch
 % The game functions receive the whole parameter struct, but mc only lists
 % parameters that are referenced as p.<name> here, so reference them all.
 gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
-  'visualRange', 'threatSpeed', 'landingThreatTime', 'obstacleRange', ...
-  'escapeGain', 'maxEscapeThrust', 'wanderThrust', 'wanderNoise', ...
-  'friction', 'maxTurnRate', 'creviceDepth', 'showTouches', 'startDelay'};
+  'visualRange', 'threatSpeed', 'fullThreatSpeed', 'landingThreatTime', 'lineOfSight', ...
+  'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
+  'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
+  'maxHideTime', 'showTouches', 'startDelay'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -78,7 +80,8 @@ tRun = t.at(tick).keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
   'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
-  'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
+  'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
+  'hideTime', 0, 'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
 state = tRun.scan(@(s, tNow, P, e) updateGame(s, tNow, P, e, ctx), seed, ...
   'pars', p, env).subscriptable();
 
@@ -183,17 +186,22 @@ try
   p.bugLength = 2.4;         % cm
   p.bugWidth = 0.9;          % cm
   p.bugColour = [0 0 0]';
-  p.visualRange = 21;        % cm, distance at which contacts can scare the bug
-  p.threatSpeed = 4.5;       % cm/s, contacts moving faster than this scare it
-  p.landingThreatTime = 0.2; % s, newly landed contacts scare it this long
+  p.visualRange = 15;        % cm, distance at which contacts can scare the bug
+  p.threatSpeed = 5;         % cm/s towards the bug at which it starts reacting
+  p.fullThreatSpeed = 25;    % cm/s towards the bug for the full reaction
+  p.landingThreatTime = 0.2; % s, a newly landed contact counts as a half threat
+  p.lineOfSight = true;      % hiding objects block the bug's view of contacts
   p.obstacleRange = 2;       % cm, bug steers around still contacts this close
-  p.escapeGain = 35;         % 1/s^2, escape thrust per cm inside visualRange
-  p.maxEscapeThrust = 600;   % cm/s^2
+  p.maxEscapeThrust = 180;   % cm/s^2 at full threat (top speed = thrust/friction)
+  p.maxEscapeTime = 1;       % s of continuous fleeing before the bug tires...
+  p.escapeRest = 1.5;        % s ...and ignores threats for this long
+  p.easeTime = 60;           % s into a trial after which it no longer flees (Inf = never)
   p.wanderThrust = 24;       % cm/s^2 (terminal wander speed = thrust/friction)
   p.wanderNoise = 3;         % rad/s, random drift of the wander heading
   p.friction = 6;            % 1/s
   p.maxTurnRate = 8;         % rad/s
   p.creviceDepth = 4.5;      % cm the bug may go past the screen edge
+  p.maxHideTime = 2;         % s past the screen edge before it comes back out
   p.showTouches = false;     % draw red markers on active contacts (costly: checks only)
   p.updateRate = 30;         % game/screen updates per second (60 = every frame)
   p.startDelay = 3;          % s before the bug first appears (while things start up)
@@ -232,30 +240,52 @@ half = g.dimsCm / 2;
 onScreen = all(abs(s.pos) <= half);
 s.hidden = ~onScreen || isUnderObject(s.pos, env.objects);
 
-% Threats and obstacles from the current contacts
+% Threat level (0-1) of each contact: how fast it moves towards the bug
+% (graded between threatSpeed and fullThreatSpeed; sideways movement counts
+% half) times how close it is; zero if a hiding object blocks the view
 C = s.contacts;
 nC = size(C, 1);
+level = zeros(nC, 1);
+isObstacle = false(nC, 1);
 if nC > 0
   rel = [s.pos(1) - C(:,2), s.pos(2) - C(:,3)];
   d = hypot(rel(:,1), rel(:,2));
-  speed = hypot(C(:,6), C(:,7));
-  isThreat = (speed > P.threatSpeed | C(:,8) < P.landingThreatTime) & ...
-    d < P.visualRange & d > 0;
-  isObstacle = ~isThreat & d < P.obstacleRange & d > 0;
-else
-  isThreat = false(0, 1);
-  isObstacle = false(0, 1);
+  toBug = rel ./ max(d, eps);
+  closing = sum(C(:,6:7) .* toBug, 2);
+  effSpeed = max(closing, 0.5 * hypot(C(:,6), C(:,7)));
+  wSpeed = min(max((effSpeed - P.threatSpeed) / max(P.fullThreatSpeed - P.threatSpeed, eps), 0), 1);
+  landed = C(:,8) < P.landingThreatTime;
+  wSpeed(landed) = max(wSpeed(landed), 0.5);
+  level = wSpeed .* max(P.visualRange - d, 0) / P.visualRange;
+  if P.lineOfSight
+    for i = find(level > 0)'
+      if ~canSee(s.pos, C(i,2:3), env.objects, g.blockedCm, P.bugLength / 2)
+        level(i) = 0;
+      end
+    end
+  end
+  isObstacle = level == 0 & d < P.obstacleRange & d > 0;
 end
+% The reaction fades over the trial (easeTime), and a tired bug ignores
+% threats for a while (escapeRest); hidden, it doesn't react at all
+ease = max(0, 1 - (tNow - s.spawnTime) / P.easeTime);
+if s.hidden || tNow < s.restUntil; ease = 0; end
+s.threatLevel = ease * max([level; 0]);
 
-s.evading = ~s.hidden && any(isThreat);
+s.evading = s.threatLevel > 0;
 if s.evading
-  % Flee along the summed push of all threats, nearer ones pushing harder
-  w = P.visualRange - d(isThreat);
-  push = sum(w .* rel(isThreat,:) ./ d(isThreat), 1);
+  s.escapeTime = s.escapeTime + dt;
+  if s.escapeTime > P.maxEscapeTime
+    s.restUntil = tNow + P.escapeRest;
+    s.escapeTime = 0;
+  end
+  % Flee along the summed push of all threats, stronger ones pushing harder
+  push = sum(level .* toBug, 1);
   desiredHeading = atan2(push(2), push(1));
-  thrust = min(P.escapeGain * max(w), P.maxEscapeThrust);
+  thrust = P.wanderThrust + (P.maxEscapeThrust - P.wanderThrust) * s.threatLevel;
   s.wanderAngle = desiredHeading;
 else
+  s.escapeTime = 0;
   s.wanderAngle = s.wanderAngle + randn() * P.wanderNoise * dt;
   wanderDir = [cos(s.wanderAngle), sin(s.wanderAngle)];
   if any(isObstacle) % steer around still paws
@@ -264,6 +294,18 @@ else
   end
   desiredHeading = atan2(wanderDir(2), wanderDir(1));
   thrust = P.wanderThrust;
+end
+
+% Don't stay in the wall (past the screen edge) longer than maxHideTime
+if onScreen
+  s.hideTime = 0;
+else
+  s.hideTime = s.hideTime + dt;
+end
+if s.hideTime > P.maxHideTime && ~s.evading
+  desiredHeading = atan2(-s.pos(2), -s.pos(1));
+  s.wanderAngle = desiredHeading;
+  thrust = max(thrust, 2 * P.wanderThrust);
 end
 
 % Non-holonomic motion: turn at a limited rate, thrust along the heading,
@@ -309,7 +351,7 @@ end
 % mc, which costs time during the session) and is saved by finishSession.
 
 function logUpdate(ctx, s, P, env)
-appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive]);
+appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel]);
 if ~isempty(s.touchEvents); appendLog(ctx, 'logTouch', s.touchEvents); end
 if ~isKey(ctx, 'catchesLogged'); ctx('catchesLogged') = 0; end
 if s.catchCount > ctx('catchesLogged')
@@ -350,8 +392,8 @@ function ok = finishSession(ctx, ref)
 ok = true;
 releaseTouch(ctx);
 mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
-  'bug', getLog(ctx, 'logBug', 6), ...
-  'bugColumns', {{'time', 'x', 'y', 'heading', 'hidden', 'alive'}}, ...
+  'bug', getLog(ctx, 'logBug', 7), ...
+  'bugColumns', {{'time', 'x', 'y', 'heading', 'hidden', 'alive', 'threatLevel'}}, ...
   'touchEvents', getLog(ctx, 'logTouch', 7), ...
   'touchEventColumns', {{'type', 'id', 'x', 'y', 'w', 'h', 'time'}}, ...
   'catchLog', getLog(ctx, 'logCatch', 4), ...
@@ -402,6 +444,28 @@ s.wanderAngle = s.heading;
 s.vel = [0 0];
 s.alive = true;
 s.hidden = true;
+s.spawnTime = s.t; % the trial's ease-in (easeTime) counts from here
+s.threatLevel = 0;
+s.escapeTime = 0;
+s.restUntil = -inf;
+s.hideTime = 0;
+end
+
+function visible = canSee(from, to, objects, blockedCm, skip)
+%CANSEE True if no hiding object or blocked area lies between the bug (at
+%   FROM) and a contact (at TO). Samples the line every 0.5 cm, ignoring the
+%   first SKIP cm (the bug itself).
+v = to - from;
+n = max(2, ceil(norm(v) / 0.5));
+visible = true;
+for k = 1:n-1
+  q = from + v * k / n;
+  if norm(q - from) < skip; continue; end
+  if isUnderObject(q, objects); visible = false; return; end
+  for b = 1:size(blockedCm, 1)
+    if isInsideRect(q, blockedCm(b,:), 0); visible = false; return; end
+  end
+end
 end
 
 function hidden = isUnderObject(pos, objects)

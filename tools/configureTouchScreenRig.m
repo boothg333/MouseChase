@@ -1,11 +1,11 @@
 function configureTouchScreenRig(apply, dimsCm, distanceCm, hwFile)
-%CONFIGURETOUCHSCREENRIG Set up this rig's hardware.mat for MouseChaseDemo.
+%CONFIGURETOUCHSCREENRIG Set up this rig's hardware.mat for MouseChaseTouch.
 %   CONFIGURETOUCHSCREENRIG() shows what would change; nothing is written.
 %   CONFIGURETOUCHSCREENRIG(true) backs up hardware.mat and writes:
 %     rig.screens      one flat screen straight ahead of the viewer, filling
 %                      the stimulus window (replaces the three virtual
 %                      screens), so Signals draws on the touchscreen
-%     rig.touchScreen  the same geometry for MouseChaseDemo, which converts
+%     rig.touchScreen  the same geometry for MouseChaseTouch, which converts
 %                      touch pixels <-> cm <-> visual degrees with it:
 %                        pxSize      [w h] of the stimulus window
 %                        dimsCm      [w h] of the visible image, in cm

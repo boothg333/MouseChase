@@ -1,10 +1,10 @@
 function checkDrawAlignment()
-% Run MouseChaseDemo headless and check that the bug layer Signals receives
+% Run MouseChaseTouch headless and check that the bug layer Signals receives
 % is drawn (per the reconstructed slimshady/vis.screen maths) exactly where
 % the game thinks the bug is, with its long axis along the heading.
 here = fileparts(mfilename('fullpath'));
 [~, fakeCleanup] = makeFakePtb(); %#ok<ASGLU> removed from the path on return
-defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseDemo.m');
+defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseTouch.m');
 global SIM
 SIM = struct('time', 0, 'released', 0);
 SIM.queue = struct('Type', {}, 'Keycode', {}, 'X', {}, 'Y', {}, 'Valuators', {}, 'Time', {});

@@ -2,7 +2,7 @@ function [fakeDir, cleanup] = makeFakePtb()
 %MAKEFAKEPTB Temporary stand-ins for the Psychtoolbox touch functions.
 %   [FAKEDIR, CLEANUP] = MAKEFAKEPTB() writes minimal fake versions of
 %   Screen, GetSecs and the TouchQueue functions to a new temporary folder
-%   and puts it at the top of the path, so MouseChaseDemo can run without a
+%   and puts it at the top of the path, so MouseChaseTouch can run without a
 %   touchscreen. They read the global SIM (SIM.time, SIM.queue of touch
 %   events, SIM.released). The folder is removed from the path and deleted
 %   when CLEANUP is cleared or goes out of scope.
