@@ -82,10 +82,10 @@ seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
   'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
-  'hideTime', 0, 'tStart', 0, 'stop', false, ...
+  'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
   'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
-state = tRun.scan(@(s, tNow, P, e) updateGame(s, tNow, P, e, ctx), seed, ...
-  'pars', p, env).subscriptable();
+state = tRun.scan(@(s, tNow, P, e, ref) updateGame(s, tNow, P, e, ref, ctx), seed, ...
+  'pars', p, env, events.expStart).subscriptable();
 
 %% Catches, reward, trials and stopping
 catchCount = state.catchCount.skipRepeats();
@@ -215,8 +215,16 @@ end
 
 %% ===================== Game logic =====================
 
-function s = updateGame(s, tNow, P, env, ctx)
+function s = updateGame(s, tNow, P, env, ref, ctx)
 %UPDATEGAME Advance the game by one Signals update and log it.
+if isempty(s.safetySave)
+  % Safety net: however the session ends (the task's own stop, mc's End,
+  % Rigbox's trial cap, an error), Rigbox discards the signal network
+  % afterwards, and with it this state - which runs this cleanup object.
+  % It saves the log unless the normal end-of-session save already did.
+  ctx('ref') = ref;
+  s.safetySave = onCleanup(@() safetySave(ctx));
+end
 P = applyStage(P);
 s = stepGame(s, tNow, P, env, ctx);
 logUpdate(ctx, s, P, env);
@@ -417,10 +425,19 @@ L = ctx(name);
 data = vertcat(L.done{:}, L.cur(1:L.n,:));
 end
 
+function safetySave(ctx)
+%SAFETYSAVE Save the log when the session is torn down, if not done yet.
+if isKey(ctx, 'saved') || ~isKey(ctx, 'ref'); return; end
+fprintf('MouseChase: session ended without the task''s stop signal; saving the log now\n');
+finishSession(ctx, ctx('ref'));
+end
+
 function ok = finishSession(ctx, ref)
 %FINISHSESSION Stop the touch reader and save the task's log next to the
-%   block file, as <expRef>_MouseChase.mat.
+%   block file, as <expRef>_MouseChase.mat. Runs once per session.
 ok = true;
+if isKey(ctx, 'saved'); return; end
+ctx('saved') = true;
 releaseTouch(ctx);
 mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'bug', getLog(ctx, 'logBug', 7), ...
