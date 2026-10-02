@@ -60,7 +60,8 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'visualRange', 'threatSpeed', 'fullThreatSpeed', 'landingThreatTime', 'lineOfSight', ...
   'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
-  'maxHideTime', 'showTouches', 'startDelay'};
+  'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
+  'targetCatches', 'maxDuration'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -81,7 +82,8 @@ seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
   'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
-  'hideTime', 0, 'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
+  'hideTime', 0, 'tStart', 0, 'stop', false, ...
+  'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
 state = tRun.scan(@(s, tNow, P, e) updateGame(s, tNow, P, e, ctx), seed, ...
   'pars', p, env).subscriptable();
 
@@ -96,9 +98,8 @@ events.rewarded = rewarded;
 outputs.reward = p.rewardSize.at(rewarded); % only fires when rewarded is true
 events.totalReward = outputs.reward.scan(@plus, 0);
 
-elapsed = t - t.at(events.expStart);
-stop = (state.catchCount >= p.targetCatches) | (elapsed >= p.maxDuration);
-events.expStop = stop.skipRepeats().then(true);
+% Stop conditions (catch target, time limit) are evaluated in the game update
+events.expStop = state.stop.skipRepeats().then(true);
 % At the end (also when mc's End button is used: Rigbox then sets this same
 % stop signal), stop the touch reader and save the task's own log. The
 % expStart value is the experiment reference.
@@ -115,15 +116,13 @@ end
 % Signals draws layers in alphabetical order of their names, hence the
 % prefixes: floor, then bug, then hiding objects (which cover the bug),
 % then optional touch markers.
-floorDraw = env.map(@(e) floorToDraw(e, ctx)).subscriptable();
-floorImg = vis.image(t);
-floorImg.sourceImage = floorDraw.image;
-floorImg.dims = floorDraw.dims;
-floorImg.repeat = floorDraw.repeat;
-floorImg.azimuth = 0;
-floorImg.altitude = 0;
-floorImg.show = true;
-visStim.a_floor = floorImg;
+% The floor is built directly as a texture layer (not with vis.image, which
+% treats an image coming from a signal as changing and re-uploads it on
+% every redraw): its texture id is fixed per environment, so it's uploaded
+% to the graphics card once
+floorElem = t.Node.Net.subscriptableOrigin('floor');
+floorElem.layers = env.map(@(e) floorLayer(e, ctx));
+visStim.a_floor = floorElem;
 
 % skipRepeats: while the bug can't be seen its drawing stays the same, so
 % Rigbox doesn't redraw (e.g. during the respawn delay, when trial changes
@@ -181,21 +180,24 @@ try
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
   p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
-  p.catchRadius = 1.5;       % cm, contact-to-bug-centre distance for a catch
+  p.trainingStage = 1;       % 1 (naive mouse) ... 5 (expert): sets the NaN values below
+  % NaN = take the value from the training stage (see stageValues);
+  % a number overrides the stage for that setting
+  p.catchRadius = NaN;       % cm, contact-to-bug-centre distance for a catch
   p.respawnDelay = 2;        % s the bug stays away after a catch
-  p.bugLength = 2.4;         % cm
-  p.bugWidth = 0.9;          % cm
+  p.bugLength = NaN;         % cm
+  p.bugWidth = NaN;          % cm
   p.bugColour = [0 0 0]';
-  p.visualRange = 15;        % cm, distance at which contacts can scare the bug
-  p.threatSpeed = 5;         % cm/s towards the bug at which it starts reacting
-  p.fullThreatSpeed = 25;    % cm/s towards the bug for the full reaction
+  p.visualRange = NaN;       % cm, distance at which contacts can scare the bug
+  p.threatSpeed = NaN;       % cm/s towards the bug at which it starts reacting
+  p.fullThreatSpeed = NaN;   % cm/s towards the bug for the full reaction
   p.landingThreatTime = 0.2; % s, a newly landed contact counts as a half threat
   p.lineOfSight = true;      % hiding objects block the bug's view of contacts
   p.obstacleRange = 2;       % cm, bug steers around still contacts this close
-  p.maxEscapeThrust = 180;   % cm/s^2 at full threat (top speed = thrust/friction)
-  p.maxEscapeTime = 1;       % s of continuous fleeing before the bug tires...
+  p.maxEscapeThrust = NaN;   % cm/s^2 at full threat (top speed = thrust/friction)
+  p.maxEscapeTime = NaN;     % s of continuous fleeing before the bug tires...
   p.escapeRest = 1.5;        % s ...and ignores threats for this long
-  p.easeTime = 60;           % s into a trial after which it no longer flees (Inf = never)
+  p.easeTime = NaN;          % s into a trial after which it no longer flees (Inf = never)
   p.wanderThrust = 24;       % cm/s^2 (terminal wander speed = thrust/friction)
   p.wanderNoise = 3;         % rad/s, random drift of the wander heading
   p.friction = 6;            % 1/s
@@ -213,8 +215,32 @@ end
 
 function s = updateGame(s, tNow, P, env, ctx)
 %UPDATEGAME Advance the game by one Signals update and log it.
+P = applyStage(P);
 s = stepGame(s, tNow, P, env, ctx);
 logUpdate(ctx, s, P, env);
+end
+
+function P = applyStage(P)
+%APPLYSTAGE Fill parameters left at NaN from the training stage's values.
+v = stageValues(P.trainingStage);
+for f = fieldnames(v)'
+  if isnan(P.(f{1})); P.(f{1}) = v.(f{1}); end
+end
+end
+
+function v = stageValues(stage)
+%STAGEVALUES Difficulty ladder: 1 = naive mouse (big bug that barely
+%   flees) ... 5 = expert. Rows are stages.
+%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime
+ladder = [   4.0       1.6      3.0          6          10          40               60             0.5           20
+             3.5       1.4      2.5          9           8          35              100             0.7           30
+             3.0       1.2      2.0         12           6          30              140             1.0           45
+             2.6       1.0      1.7         15           5          25              180             1.2           60
+             2.4       0.9      1.5         18           4          20              240             1.5           90];
+names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
+  'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime'};
+row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
+v = cell2struct(num2cell(row(:)), names(:), 1);
 end
 
 function s = stepGame(s, tNow, P, env, ctx)
@@ -222,14 +248,17 @@ function s = stepGame(s, tNow, P, env, ctx)
 g = geometry(ctx);
 if isempty(s.t) % first update: the bug enters after p.startDelay
   s.t = tNow;
+  s.tStart = tNow;
   s.respawnAt = tNow + P.startDelay;
 end
 dt = min(max(tNow - s.t, 0), 0.1); % cap to avoid jumps after a stall
 s.t = tNow;
 [s.contacts, s.touchEvents] = pollTouches(ctx);
+s.stop = s.catchCount >= P.targetCatches || tNow - s.tStart >= P.maxDuration;
 
 if ~s.alive
   s.evading = false;
+  s.threatLevel = 0;
   if tNow >= s.respawnAt
     s = spawnBug(s, g, P);
   end
@@ -401,7 +430,7 @@ mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'environment', [], 'params', [], 'geometry', geometry(ctx));
 if isKey(ctx, 'env'); mouseChase.environment = ctx('env'); end
 if isKey(ctx, 'params'); mouseChase.params = ctx('params'); end
-dirs = getenv('MOUSECHASE_LOG_DIR'); % set by tools/simulation
+dirs = getenv('MOUSECHASE_LOG_DIR'); % set by tools/simulation (pathsep-separated)
 if isempty(dirs)
   try
     dirs = dat.expPath(ref, 'main'); % local and server experiment folders
@@ -409,8 +438,12 @@ if isempty(dirs)
     warning('MouseChase:logNotSaved', 'No experiment folder for "%s": %s', ref, ex.message);
     return
   end
+else
+  dirs = strsplit(dirs, pathsep);
 end
-for d = cellstr(dirs)
+% NB dat.expPath returns a column cell array; a for loop runs over columns,
+% so make it a row to visit every folder
+for d = reshape(cellstr(dirs), 1, [])
   f = fullfile(d{1}, [ref '_MouseChase.mat']);
   try
     if ~exist(d{1}, 'dir'); mkdir(d{1}); end
@@ -691,6 +724,7 @@ end
 
 function d = bugToDraw(s, P, ctx)
 g = geometry(ctx);
+P = applyStage(P);
 % Out of sight (respawning, or wholly beyond the screen edge): a constant
 % hidden layer, so nothing needs redrawing
 visible = s.alive && all(abs(s.pos) <= g.dimsCm / 2 + P.bugLength / 2);
@@ -705,16 +739,28 @@ d.dims = k * [P.bugLength; P.bugWidth];
 d.show = true;
 end
 
-function d = floorToDraw(env, ctx)
+function layer = floorLayer(env, ctx)
+%FLOORLAYER Texture layer for the floor colour or image. The image covers
+%   env.floorExtentCm (default 1.1 x the screen: the flat screen isn't a
+%   rectangle in degrees, so it's overscanned), centred on the screen.
 g = geometry(ctx);
-half = abs(cm2deg(g.dimsCm / 2, g));
-d.dims = 2.2 * half(:); % overscan: the flat screen isn't a rectangle in degrees
-d.repeat = env.floorRepeat;
+extent = 1.1 * g.dimsCm;
+if isfield(env, 'floorExtentCm') && ~isempty(env.floorExtentCm); extent = env.floorExtentCm; end
+half = abs(cm2deg(extent / 2, g));
 if isempty(env.floorImage)
-  d.image = uint8(255 * reshape(env.floorColour, 1, 1, 3));
+  img = reshape(env.floorColour, 1, 1, 3);
 else
-  d.image = env.floorImage;
+  img = double(env.floorImage) / iff(isa(env.floorImage, 'uint8'), 255, 1);
 end
+layer = vis.emptyLayer();
+layer.textureId = ['floor_' env.id]; % no '~': uploaded once
+layer.size = 2 * half(:);
+layer.isPeriodic = false;
+if isfield(env, 'floorInterpolation') && ~isempty(env.floorInterpolation)
+  layer.interpolation = env.floorInterpolation;
+end
+[layer.rgba, layer.rgbaSize] = vis.rgba(img, 1);
+layer.show = true;
 end
 
 function d = objectsToDraw(env, nPool, ctx)
@@ -754,25 +800,32 @@ end
 
 function env = loadEnvironment(id, envDir)
 %LOADENVIRONMENT Load MouseChaseEnvironments/<id>.mat (variable 'env').
-%   An environment is a struct with fields (all optional except objects):
-%     id           name, for the log
-%     floorColour  [r g b] in 0-1, used when there is no floorImage
-%     floorImage   HxW or HxWx3 uint8 image stretched over the screen
-%                  (keep it small, e.g. <= 256 px: it is re-uploaded to the
-%                  graphics card on every frame)
-%     floorRepeat  true to tile floorImage instead of stretching it
-%     objects      struct array of hiding places, each with
-%                    shape  'rectangle' or 'ellipse'
-%                    centre [x y] cm from the screen centre (y up)
-%                    size   [w h] cm
-%                    angle  deg, anticlockwise
-%                    colour [r g b] in 0-1
+%   Environments are made and saved with the mouseChaseEnv package (see
+%   mouseChaseEnv.create). An environment is a struct with fields:
+%     id                  name, logged with the session
+%     description         free text
+%     floorColour         [r g b] in 0-1, used when there is no floorImage
+%     floorImage          HxW or HxWx3 image (uint8, or double in 0-1),
+%                         row 1 at the top of the screen
+%     floorExtentCm       [w h] cm the floor image covers, centred on the
+%                         screen (default 1.1 x the screen size)
+%     floorInterpolation  'linear' (smooth) or 'nearest' (sharp edges)
+%     objects             struct array of hiding places, each with
+%                           shape  'rectangle' or 'ellipse'
+%                           centre [x y] cm from the screen centre (y up)
+%                           size   [w h] cm
+%                           angle  deg, anticlockwise
+%                           colour [r g b] in 0-1
 %   'default' is built in: grey floor, one rock in the middle.
+noObjects = struct('shape', {}, 'centre', {}, 'size', {}, 'angle', {}, 'colour', {});
+defaults = struct('id', id, 'description', '', 'floorColour', [0.5 0.5 0.5], ...
+  'floorImage', [], 'floorExtentCm', [], 'floorInterpolation', 'linear', ...
+  'objects', noObjects);
 if strcmp(id, 'default')
-  env = struct('id', 'default', 'floorColour', [0.5 0.5 0.5], ...
-    'floorImage', [], 'floorRepeat', false, ...
-    'objects', struct('shape', 'rectangle', 'centre', [0 0], ...
-    'size', [7 4.5], 'angle', 0, 'colour', [0.7 0.7 0.7]));
+  env = defaults;
+  env.description = 'Grey floor, one rock in the middle';
+  env.objects = struct('shape', 'rectangle', 'centre', [0 0], ...
+    'size', [7 4.5], 'angle', 0, 'colour', [0.7 0.7 0.7]);
   return
 end
 f = fullfile(envDir, [id '.mat']);
@@ -780,11 +833,7 @@ assert(exist(f, 'file') == 2, 'MouseChase:noEnvironment', ...
   'Environment file not found: %s', f);
 s = load(f, 'env');
 env = s.env;
-defaults = struct('id', id, 'floorColour', [0.5 0.5 0.5], ...
-  'floorImage', [], 'floorRepeat', false);
-for f = fieldnames(defaults)'
-  if ~isfield(env, f{1}); env.(f{1}) = defaults.(f{1}); end
+for fn = fieldnames(defaults)'
+  if ~isfield(env, fn{1}); env.(fn{1}) = defaults.(fn{1}); end
 end
-if ~isfield(env, 'objects'); env.objects = struct('shape', {}, 'centre', {}, ...
-    'size', {}, 'angle', {}, 'colour', {}); end
 end

@@ -11,7 +11,8 @@ rng(1);
 % (so this script can follow it) and save the session log to a temp folder
 setenv('MOUSECHASE_DEBUG_EVENTS', '1');
 logDir = tempname; mkdir(logDir);
-setenv('MOUSECHASE_LOG_DIR', logDir);
+logDir2 = tempname; mkdir(logDir2); % stands in for the server copy
+setenv('MOUSECHASE_LOG_DIR', [logDir pathsep logDir2]);
 
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
@@ -133,6 +134,8 @@ L = logs(events);
 fprintf('Saved events OK: %s\n', strjoin(fieldnames(L)', ', '));
 % The task's own log, saved by finishSession at expStop
 f = dir(fullfile(logDir, '*_MouseChase.mat'));
+f2 = dir(fullfile(logDir2, '*_MouseChase.mat'));
+fprintf('Session log saved in both folders (local + server): %d\n', ~isempty(f) && ~isempty(f2));
 if isempty(f)
   fprintf('Session log NOT saved\n');
 else
