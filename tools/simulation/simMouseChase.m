@@ -42,6 +42,16 @@ hS = events.expStop.onValue(@(v) setStop()); %#ok<NASGU>
 touchPort = 50555; % the task listens here instead of starting tools/touchReader.ps1
 setenv('MOUSECHASE_TOUCH_PORT', num2str(touchPort));
 sender = java.net.DatagramSocket();
+% Like exp.SignalsExp/loadVisual at experiment start: every visual
+% element's layers must already be readable (a struct with 'show')
+for vn = fieldnames(visual)'
+  val = visual.(vn{1}).Node.CurrValue.layers.Node.CurrValue;
+  try
+    any([val.show]); %#ok<VUNUS>
+  catch ex
+    fprintf('Rigbox could not load visual %s at start: %s\n', vn{1}, ex.message);
+  end
+end
 post(p, pars);
 post(t, 0);
 post(events.expStart, 'sim');

@@ -120,8 +120,10 @@ end
 % treats an image coming from a signal as changing and re-uploads it on
 % every redraw): its texture id is fixed per environment, so it's uploaded
 % to the graphics card once
+% (scan, seeded with an empty hidden layer: Rigbox reads the layer's value
+% when the experiment starts, before the environment has loaded)
 floorElem = t.Node.Net.subscriptableOrigin('floor');
-floorElem.layers = env.map(@(e) floorLayer(e, ctx));
+floorElem.layers = env.scan(@(~, e) floorLayer(e, ctx), vis.emptyLayer());
 visStim.a_floor = floorElem;
 
 % skipRepeats: while the bug can't be seen its drawing stays the same, so
