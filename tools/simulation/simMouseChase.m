@@ -17,7 +17,9 @@ setenv('MOUSECHASE_LOG_DIR', [logDir pathsep logDir2]);
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
 pars.targetCatches = 3; % keep it quick
-pars.rewardProbability = 0.5;
+pars.trainingStage = 3; % a stage where the bug flees (stage 1 doesn't)
+pars.rewardProbability = 0.5; % overrides the stage's value
+pars.wanderThrust = 24; % explicit, for the trial-parameter check below
 pars.updateRate = 60; % one game update per simulated frame (the checks assume it)
 
 net = sig.Net;

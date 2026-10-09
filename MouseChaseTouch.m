@@ -178,7 +178,7 @@ end
 %% Experimenter parameters (defaults)
 try
   p.rewardSize = 5;          % ul per rewarded catch
-  p.rewardProbability = 0.8; % chance that a catch is rewarded
+  p.rewardProbability = NaN; % chance that a catch is rewarded (NaN: from the stage)
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
   p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
@@ -200,7 +200,7 @@ try
   p.maxEscapeTime = NaN;     % s of continuous fleeing before the bug tires...
   p.escapeRest = 1.5;        % s ...and ignores threats for this long
   p.easeTime = NaN;          % s into a trial after which it no longer flees (Inf = never)
-  p.wanderThrust = 24;       % cm/s^2 (terminal wander speed = thrust/friction)
+  p.wanderThrust = NaN;      % cm/s^2 (wander speed = thrust/friction)
   p.wanderNoise = 3;         % rad/s, random drift of the wander heading
   p.friction = 6;            % 1/s
   p.maxTurnRate = 8;         % rad/s
@@ -241,14 +241,18 @@ end
 function v = stageValues(stage)
 %STAGEVALUES Difficulty ladder: 1 = naive mouse (big bug that barely
 %   flees) ... 5 = expert. Rows are stages.
-%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime
-ladder = [   4.0       1.6      3.0          6          10          40               60             0.5           20
-             3.5       1.4      2.5          9           8          35              100             0.7           30
-             3.0       1.2      2.0         12           6          30              140             1.0           45
-             2.6       1.0      1.7         15           5          25              180             1.2           60
-             2.4       0.9      1.5         18           4          20              240             1.5           90];
+%   Stage 1 is "touch the bug, get a reward": slow, big, no fleeing
+%   (visualRange 0). wanderThrust = wander speed (cm/s) x friction (6);
+%   top escape speed = maxEscapeThrust / friction.
+%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability
+ladder = [   4.0       1.6      3.0          0          15          45               12             0.5           20       12           1.0
+             3.5       1.4      2.5          6          15          45               60             0.5           20       18           1.0
+             3.0       1.2      2.0         10          10          35              108             0.8           40       24           1.0
+             2.6       1.0      1.7         14           7          28              162             1.0           60       24           0.9
+             2.4       0.9      1.5         18           5          22              210             1.3           90       30           0.8];
 names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
-  'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime'};
+  'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
+  'wanderThrust', 'rewardProbability'};
 row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
 end
@@ -295,7 +299,7 @@ if nC > 0
   wSpeed = min(max((effSpeed - P.threatSpeed) / max(P.fullThreatSpeed - P.threatSpeed, eps), 0), 1);
   landed = C(:,8) < P.landingThreatTime;
   wSpeed(landed) = max(wSpeed(landed), 0.5);
-  level = wSpeed .* max(P.visualRange - d, 0) / P.visualRange;
+  level = wSpeed .* max(P.visualRange - d, 0) / max(P.visualRange, eps); % 0 if visualRange is 0
   if P.lineOfSight
     for i = find(level > 0)'
       if ~canSee(s.pos, C(i,2:3), env.objects, g.blockedCm, P.bugLength / 2)
