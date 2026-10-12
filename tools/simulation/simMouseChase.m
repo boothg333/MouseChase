@@ -1,5 +1,8 @@
-function simMouseChase()
+function simMouseChase(stage)
 % Headless simulation of MouseChaseTouch with scripted touches.
+% SIMMOUSECHASE(STAGE) runs at that training stage (default 3, where the
+% bug flees; at stage 1 it doesn't).
+if nargin < 1; stage = 3; end
 here = fileparts(mfilename('fullpath'));
 [~, fakeCleanup] = makeFakePtb(); %#ok<ASGLU> removed from the path on return
 defFile = fullfile(fileparts(fileparts(here)), 'MouseChaseTouch.m');
@@ -17,7 +20,7 @@ setenv('MOUSECHASE_LOG_DIR', [logDir pathsep logDir2]);
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
 pars.targetCatches = 3; % keep it quick
-pars.trainingStage = 3; % a stage where the bug flees (stage 1 doesn't)
+pars.trainingStage = stage;
 pars.rewardProbability = 0.5; % overrides the stage's value
 pars.wanderThrust = 24; % explicit, for the trial-parameter check below
 pars.updateRate = 60; % one game update per simulated frame (the checks assume it)

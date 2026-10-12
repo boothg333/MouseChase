@@ -97,8 +97,13 @@ if ~isempty(starts)
   imagesc(ax, edges{1}, edges{2}, log1p(N'));
   colormap(ax, flipud(gray)); cb = colorbar(ax); cb.Label.String = 'touch density (log)';
 end
-for k = 1:numel(m.environment.objects)
-  o = m.environment.objects(k);
+objects = m.environment.objects;
+if isfield(m, 'params') && isstruct(m.params) && isfield(m.params, 'hidingObjects') ...
+    && ~m.params.hidingObjects
+  objects = objects([]); % this training stage had no hiding objects
+end
+for k = 1:numel(objects)
+  o = objects(k);
   [x, y] = outline(o.shape, o.centre, o.size, o.angle);
   plot(ax, x, y, 'Color', [0.2 0.5 0.2], 'LineWidth', 1.5);
 end

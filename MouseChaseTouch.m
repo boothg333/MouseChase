@@ -61,7 +61,7 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
-  'targetCatches', 'maxDuration'};
+  'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -80,7 +80,7 @@ tick = t.map2(p.updateRate, @(x, rate) floor(x * rate)).skipRepeats();
 tRun = t.at(tick).keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
-  'catchCount', 0, 'lastCatchRewarded', false, 'evading', false, ...
+  'catchCount', 0, 'lastCatchRewarded', false, 'lastRewardSize', 0, 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
   'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
   'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
@@ -95,7 +95,9 @@ events.catches = catchEvent;
 % Whether a catch is rewarded is drawn in updateGame (p.rewardProbability)
 rewarded = state.lastCatchRewarded.at(catchEvent);
 events.rewarded = rewarded;
-outputs.reward = p.rewardSize.at(rewarded); % only fires when rewarded is true
+% The reward size (ul) comes from the game state, where the training stage
+% has been applied; only fires when rewarded is true
+outputs.reward = state.lastRewardSize.at(rewarded);
 events.totalReward = outputs.reward.scan(@plus, 0);
 
 % Stop conditions (catch target, time limit) are evaluated in the game update
@@ -142,7 +144,8 @@ visStim.b_bug = bug;
 % Fixed pools of rectangle and ellipse patches; the environment decides
 % how many are shown and where.
 nPool = 6;
-objDraw = env.map(@(e) objectsToDraw(e, nPool, ctx));
+% (map2 with p: the training stage decides whether objects are included)
+objDraw = env.map2(p, @(e, P) objectsToDraw(stageObjects(e, applyStage(P)), nPool, ctx));
 shapes = {'rectangle', 'circle'};
 for iShape = 1:2
   for k = 1:nPool
@@ -177,7 +180,8 @@ end
 
 %% Experimenter parameters (defaults)
 try
-  p.rewardSize = 5;          % ul per rewarded catch
+  p.rewardSize = NaN;        % ul per rewarded catch (NaN: from the stage)
+  p.hidingObjects = NaN;     % 1/0: use the environment's hiding objects (NaN: from the stage)
   p.rewardProbability = NaN; % chance that a catch is rewarded (NaN: from the stage)
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
@@ -244,22 +248,31 @@ function v = stageValues(stage)
 %   Stage 1 is "touch the bug, get a reward": slow, big, no fleeing
 %   (visualRange 0). wanderThrust = wander speed (cm/s) x friction (6);
 %   top escape speed = maxEscapeThrust / friction.
-%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability
-ladder = [   4.0       1.6      3.0          0          15          45               12             0.5           20       12           1.0
-             3.5       1.4      2.5          6          15          45               60             0.5           20       18           1.0
-             3.0       1.2      2.0         10          10          35              108             0.8           40       24           1.0
-             2.6       1.0      1.7         14           7          28              162             1.0           60       24           0.9
-             2.4       0.9      1.5         18           5          22              210             1.3           90       30           0.8];
+%   rewardSize in ul; hidingObjects 0 = the environment's objects (rocks
+%   etc.) are left out, 1 = included.
+%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects
+ladder = [   4.0       1.6      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
+             3.5       1.4      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
+             3.0       1.2      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
+             2.6       1.0      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
+             2.4       0.9      1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
 names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
   'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
-  'wanderThrust', 'rewardProbability'};
+  'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects'};
 row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
+end
+
+function env = stageObjects(env, P)
+%STAGEOBJECTS Leave out the environment's hiding objects at training stages
+%   without them (P.hidingObjects == 0; P already has the stage applied).
+if ~P.hidingObjects; env.objects = env.objects([]); end
 end
 
 function s = stepGame(s, tNow, P, env, ctx)
 %STEPGAME Advance the bug by one Signals update.
 g = geometry(ctx);
+env = stageObjects(env, P); % no rocks etc. at the first training stages
 if isempty(s.t) % first update: the bug enters after p.startDelay
   s.t = tNow;
   s.tStart = tNow;
@@ -383,6 +396,7 @@ end
 if ~s.hidden && nC > 0 && any(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius)
   s.catchCount = s.catchCount + 1;
   s.lastCatchRewarded = rand() < P.rewardProbability;
+  s.lastRewardSize = P.rewardSize;
   s.alive = false;
   s.evading = false;
   s.respawnAt = tNow + P.respawnDelay;
