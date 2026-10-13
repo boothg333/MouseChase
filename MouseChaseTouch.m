@@ -61,7 +61,8 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
-  'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects'};
+  'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
+  'gaborCycles', 'gaborContrast', 'gaborColour'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -131,15 +132,16 @@ visStim.a_floor = floorElem;
 % skipRepeats: while the bug can't be seen its drawing stays the same, so
 % Rigbox doesn't redraw (e.g. during the respawn delay, when trial changes
 % and reward delivery keep the PC busy)
-bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats().subscriptable();
-bug = vis.patch(t, 'circle');
-bug.azimuth = bugDraw.azimuth;
-bug.altitude = bugDraw.altitude;
-bug.dims = bugDraw.dims;
-bug.orientation = bugDraw.orientation;
-bug.colour = p.bugColour;
-bug.show = bugDraw.show;
-visStim.b_bug = bug;
+% The bug is a Gabor patch: a Gaussian window (elongated to the bug's
+% length and width) over a grating, both turning with its heading. Built
+% from Rigbox's gaussianLayer/sinusoidLayer like vis.grating, but with a
+% rotating window and the grating's phase tied to the bug's centre, so the
+% stripes move with the bug. (scan, seeded with empty hidden layers: Rigbox
+% reads the layers when the experiment starts)
+bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats();
+bugElem = t.Node.Net.subscriptableOrigin('bug');
+bugElem.layers = bugDraw.map(@bugLayers).scan(@(~, l) l, vis.emptyLayer(2));
+visStim.b_bug = bugElem;
 
 % Fixed pools of rectangle and ellipse patches; the environment decides
 % how many are shown and where.
@@ -193,7 +195,9 @@ try
   p.respawnDelay = 2;        % s the bug stays away after a catch
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
-  p.bugColour = [0 0 0]';
+  p.gaborCycles = 3;         % grating cycles along the bug's length
+  p.gaborContrast = 1;       % 0-1
+  p.gaborColour = [1 1 1]';  % colour of the bright stripes (dark ones are black)
   p.visualRange = NaN;       % cm, distance at which contacts can scare the bug
   p.threatSpeed = NaN;       % cm/s towards the bug at which it starts reacting
   p.fullThreatSpeed = NaN;   % cm/s towards the bug for the full reaction
@@ -765,15 +769,48 @@ P = applyStage(P);
 % Out of sight (respawning, or wholly beyond the screen edge): a constant
 % hidden layer, so nothing needs redrawing
 visible = s.alive && all(abs(s.pos) <= g.dimsCm / 2 + P.bugLength / 2);
-if ~visible
-  d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, ...
-    'dims', [1; 1], 'show', false);
-  return
-end
+d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, 'dims', [1; 1], ...
+  'cycles', P.gaborCycles, 'contrast', P.gaborContrast, ...
+  'colour', P.gaborColour(:), 'show', false);
+if ~visible; return; end
 d.orientation = mod(s.heading * 180 / pi, 360);
 [d.azimuth, d.altitude, k] = patchPosition(s.pos, d.orientation, g);
 d.dims = k * [P.bugLength; P.bugWidth];
 d.show = true;
+end
+
+function layers = bugLayers(d)
+%BUGLAYERS The bug as a Gabor patch: a Gaussian window layer (drawn first,
+%   into the alpha channel only, as a stencil) and a grating layer blended
+%   through it, as in vis.grating. Both are rotated to the heading
+%   (d.orientation) and offset by the pre-rotated position from
+%   patchPosition. For the grating that offset also fixes its phase at the
+%   bug's centre (a bright stripe through the middle), so the stripes move
+%   and turn with the bug. The grating varies along the body axis, i.e.
+%   stripes run across the bug like body segments.
+%   The window's sigma is a quarter of the bug's length and width, so it
+%   fades out (to 14% contrast) at the bug's edge.
+[win, winImg] = vis.gaussianLayer([d.azimuth; d.altitude], d.dims / 4);
+win.textureId = 'gaussianStencil';
+win.texAngle = d.orientation;
+[win.rgba, win.rgbaSize] = vis.rgba(0, winImg);
+win.blending = 'none';
+win.colourMask = [false false false true]';
+win.show = d.show;
+
+wavelength = d.dims(1) / d.cycles; % deg
+[grating, gratingImg] = vis.sinusoidLayer(0, 1 / wavelength, 0, d.orientation);
+grating.textureId = 'sinusoidGrating';
+grating.texOffset = [d.azimuth; 0]; % phase tied to the bug's centre
+[grating.rgba, grating.rgbaSize] = vis.rgba(gratingImg, 1);
+grating.blending = 'destination';
+lo = 0.5 - 0.5 * d.contrast;
+hi = 0.5 + 0.5 * d.contrast;
+grating.minColour = lo .* [d.colour; 0];
+grating.maxColour = hi .* [d.colour; 1];
+grating.show = d.show;
+
+layers = [win, grating];
 end
 
 function layer = floorLayer(env, ctx)
