@@ -187,7 +187,7 @@ try
   p.rewardProbability = NaN; % chance that a catch is rewarded (NaN: from the stage)
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
-  p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
+  p.environment = 'grass';   % name of a MouseChaseEnvironments/<name>.mat ('default': plain grey)
   p.trainingStage = 1;       % 1 (naive mouse) ... 5 (expert): sets the NaN values below
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting

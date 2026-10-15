@@ -4,12 +4,15 @@ function scr = screen()
 %   see tools/configureTouchScreenRig.m and tools/setSyncSquare.m).
 %     dimsCm       visible screen area [w h], cm
 %     extentCm     area a floor image covers (1.1 x the screen: overscan)
-%     floorPx      longest side of rendered floor images, px (kept small)
+%     pxSize       screen resolution [w h], px
+%     floorPx      longest side of rendered pattern floors, px (kept small;
+%                  image floors are rendered at screen resolution)
 %     blockedCm    areas the mouse can't reach, [xmin ymin xmax ymax] per row
 %                  (the box over the photodiode square, bottom-right)
 %     creviceCm    how far past the edge the bug can hide
 %     maxPerShape  hiding objects of each shape the task can draw
 scr.dimsCm = [37.6 30.1];
+scr.pxSize = [1280 1024];
 scr.extentCm = 1.1 * scr.dimsCm;
 scr.floorPx = 256;
 box = 2.2;

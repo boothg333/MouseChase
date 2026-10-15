@@ -9,7 +9,9 @@ function env = setFloor(env, type, varargin)
 %     'noise'     'grainCm' 1, 'contrast' 0.15, 'colour' [0.5 x3], 'seed' 1
 %     'gradient'  'colours' [from; to], 'angle' 90 (direction of change,
 %                 deg anticlockwise from rightwards: 90 = bottom to top)
-%     'image'     'file' (any image imread reads; stretched over the screen)
+%     'image'     'file' (any image imread reads; stretched over the screen),
+%                 'maxPx' (longest side of the rendered floor; default: the
+%                 screen's resolution, so photos stay sharp)
 %   Patterns are centred on the screen and rendered at most
 %   mouseChaseEnv.screen().floorPx pixels wide.
 
@@ -18,7 +20,12 @@ opts = struct(varargin{:});
 grey2 = [0.45 0.45 0.45; 0.55 0.55 0.55];
 interp = 'nearest'; % sharp edges for geometric patterns
 img = [];
-[X, Y] = floorGrid(scr);
+maxPx = scr.floorPx;
+if strcmpi(type, 'image')
+  maxPx = round(max(scr.pxSize .* scr.extentCm ./ scr.dimsCm)); % screen resolution
+  if isfield(opts, 'maxPx'); maxPx = opts.maxPx; opts = rmfield(opts, 'maxPx'); end
+end
+[X, Y] = floorGrid(scr, maxPx);
 switch lower(type)
   case 'uniform'
     opts = withDefaults(opts, struct('colour', [0.5 0.5 0.5]));
@@ -77,10 +84,10 @@ env.floorExtentCm = scr.extentCm;
 env.floorInterpolation = interp;
 end
 
-function [X, Y] = floorGrid(scr)
+function [X, Y] = floorGrid(scr, maxPx)
 % Pixel-centre coordinates (cm) of the floor image; row 1 is the top
 ext = scr.extentCm;
-n = round(scr.floorPx * ext / max(ext));
+n = round(maxPx * ext / max(ext));
 x = ((1:n(1)) - 0.5) / n(1) * ext(1) - ext(1) / 2;
 y = ext(2) / 2 - ((1:n(2)) - 0.5) / n(2) * ext(2);
 [X, Y] = meshgrid(x, y);
