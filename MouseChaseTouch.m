@@ -195,8 +195,8 @@ try
   p.respawnDelay = 2;        % s the bug stays away after a catch
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
-  p.gaborCycles = 3;         % grating cycles along the bug's length
-  p.gaborContrast = 1;       % 0-1
+  p.gaborCycles = 2;         % grating cycles along the bug's length
+  p.gaborContrast = 1.5;     % 1 = stripes from black to white; >1 saturates them (bolder)
   p.gaborColour = [1 1 1]';  % colour of the bright stripes (dark ones are black)
   p.visualRange = NaN;       % cm, distance at which contacts can scare the bug
   p.threatSpeed = NaN;       % cm/s towards the bug at which it starts reacting
@@ -255,11 +255,11 @@ function v = stageValues(stage)
 %   rewardSize in ul; hidingObjects 0 = the environment's objects (rocks
 %   etc.) are left out, 1 = included.
 %            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects
-ladder = [   4.0       1.6      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
-             3.5       1.4      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
-             3.0       1.2      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
-             2.6       1.0      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
-             2.4       0.9      1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
+ladder = [   6.0       2.4      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
+             5.25      2.1      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
+             4.5       1.8      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
+             3.9       1.5      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
+             3.6       1.35     1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
 names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
   'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
   'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects'};
@@ -469,7 +469,11 @@ mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'catchLog', getLog(ctx, 'logCatch', 4), ...
   'catchColumns', {{'time', 'x', 'y', 'rewarded'}}, ...
   'environment', [], 'params', [], 'geometry', geometry(ctx));
-if isKey(ctx, 'env'); mouseChase.environment = ctx('env'); end
+if isKey(ctx, 'env')
+  % without the floor image (MBs for photos); env.floor keeps how it was made
+  mouseChase.environment = ctx('env');
+  mouseChase.environment.floorImage = [];
+end
 if isKey(ctx, 'params'); mouseChase.params = ctx('params'); end
 dirs = getenv('MOUSECHASE_LOG_DIR'); % set by tools/simulation (pathsep-separated)
 if isempty(dirs)
@@ -804,6 +808,8 @@ grating.textureId = 'sinusoidGrating';
 grating.texOffset = [d.azimuth; 0]; % phase tied to the bug's centre
 [grating.rgba, grating.rgbaSize] = vis.rgba(gratingImg, 1);
 grating.blending = 'destination';
+% Contrast above 1 pushes these below 0 / above 1; the graphics card clips
+% the result, giving saturated black and white stripes
 lo = 0.5 - 0.5 * d.contrast;
 hi = 0.5 + 0.5 * d.contrast;
 grating.minColour = lo .* [d.colour; 0];

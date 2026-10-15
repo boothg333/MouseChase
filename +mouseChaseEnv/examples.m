@@ -3,8 +3,8 @@ function examples(overwrite)
 %   MOUSECHASEENV.EXAMPLES() saves (without replacing existing ones):
 %     rocks3           grey floor, three rocks spread over the screen
 %     checkerLeaves    checkerboard floor, a log and two leaves
-%     grass            grass photo floor (images/grass.png), one rock in the
-%                      middle: MouseChaseTouch's default environment
+%     grass            grass photo floor (images/grass.png) at 50% contrast,
+%                      one rock in the middle: MouseChaseTouch's default
 %     orientationCheck dark top / light bottom, small rock in the top-left
 %                      corner: on the touchscreen it must look like
 %                      mouseChaseEnv.preview('orientationCheck')
@@ -26,9 +26,9 @@ env = mouseChaseEnv.addObject(env, 'ellipse', [-11 -6], [5 2.5], -40, [0.3 0.5 0
 env = mouseChaseEnv.addObject(env, 'ellipse', [10 6], [5 2.5], 60, [0.3 0.5 0.25]);
 trySave(env, overwrite);
 
-env = mouseChaseEnv.create('grass', 'Grass photo floor, one rock in the middle');
+env = mouseChaseEnv.create('grass', 'Grass photo floor (50% contrast), one rock in the middle');
 env = mouseChaseEnv.setFloor(env, 'image', 'file', fullfile(fileparts(fileparts( ...
-  mfilename('fullpath'))), 'MouseChaseEnvironments', 'images', 'grass.png'));
+  mfilename('fullpath'))), 'MouseChaseEnvironments', 'images', 'grass.png'), 'contrast', 0.5);
 env = mouseChaseEnv.addObject(env, 'rectangle', [0 0], [7 4.5], 0, [0.7 0.7 0.7]);
 trySave(env, overwrite);
 

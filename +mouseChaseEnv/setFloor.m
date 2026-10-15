@@ -10,6 +10,8 @@ function env = setFloor(env, type, varargin)
 %     'gradient'  'colours' [from; to], 'angle' 90 (direction of change,
 %                 deg anticlockwise from rightwards: 90 = bottom to top)
 %     'image'     'file' (any image imread reads; stretched over the screen),
+%                 'contrast' 1 (scales the image's contrast around its
+%                 average colour: 0.5 = half the contrast, 0 = flat),
 %                 'maxPx' (longest side of the rendered floor; default: the
 %                 screen's resolution, so photos stay sharp)
 %   Patterns are centred on the screen and rendered at most
@@ -59,6 +61,7 @@ switch lower(type)
     interp = 'linear';
   case 'image'
     assert(isfield(opts, 'file'), 'mouseChaseEnv:noFile', 'Give the image with ''file''.');
+    opts = withDefaults(opts, struct('file', '', 'contrast', 1));
     src = imread(opts.file);
     if size(src, 3) == 1; src = repmat(src, 1, 1, 3); end
     src = double(src(:,:,1:3)) / double(intmax(class(src)));
@@ -73,6 +76,9 @@ switch lower(type)
       layer = src(:,:,c);
       img(:,:,c) = layer(idx);
     end
+    % Contrast around each channel's mean (keeps the average colour)
+    m = mean(mean(img, 1), 2);
+    img = min(max(m + opts.contrast * (img - m), 0), 1);
     interp = 'linear';
   otherwise
     error('mouseChaseEnv:badFloor', 'Unknown floor type ''%s''.', type);
