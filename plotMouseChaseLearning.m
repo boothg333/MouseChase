@@ -10,6 +10,7 @@ function [T, S] = plotMouseChaseLearning(sessions, varargin)
 %     finding vs hitting: time until a paw is near the bug, and from there
 %       to the catch
 %     activity: distance moved (from the touches)
+%     going to the reward spout within 10 s of a catch, against random times
 %     approach before the catches, one curve per session
 %     catches per minute within each session (engagement)
 %   Training stage changes are marked. PLOTMOUSECHASELEARNING(SESSIONS)
@@ -17,11 +18,13 @@ function [T, S] = plotMouseChaseLearning(sessions, varargin)
 %   Options (name, value):
 %     'root'     subjects folder (default \\zenneth.cortexlab.net\Subjects)
 %     'saveDir'  save the figure as PNG (and the table as CSV) here
+%     'video'    true: the mouse's position from video tracking where there
+%                is a video (mouseChaseTrack: slow the first time, cached)
 %   Other options are passed to mouseChaseMetrics.
 %   [T, S] = PLOTMOUSECHASELEARNING(...) returns a table with one row per
 %   session and the per-session measures (mouseChaseMetrics).
 
-o = struct('root', '\\zenneth.cortexlab.net\Subjects', 'saveDir', '');
+o = struct('root', '\\zenneth.cortexlab.net\Subjects', 'saveDir', '', 'video', false);
 mOpts = {};
 for k = 1:2:numel(varargin)
   if isfield(o, varargin{k}); o.(varargin{k}) = varargin{k+1};
@@ -40,9 +43,13 @@ end
 %% Measures per session
 S = cell(1, numel(sessions));
 for k = 1:numel(sessions)
-  m = mouseChaseLoad(sessions{k}, o.root);
+  [m, folder] = mouseChaseLoad(sessions{k}, o.root);
   fprintf('%s\n', m.expRef);
-  S{k} = mouseChaseMetrics(m, mOpts{:});
+  opts = mOpts;
+  if o.video && exist(fullfile(folder, [m.expRef '_topCam.mj2']), 'file')
+    opts = [opts, {'track', mouseChaseTrack(m, folder)}]; %#ok<AGROW>
+  end
+  S{k} = mouseChaseMetrics(m, opts{:});
 end
 S = [S{:}];
 [~, order] = sort({S.expRef}); % date_seq_subject sorts by date, then sequence
@@ -51,7 +58,8 @@ if isempty(subject); subject = regexprep(S(1).expRef, '^\d{4}-\d{2}-\d{2}_\d+_',
 cols = {'expRef', 'date', 'trainingStage', 'rewardSize', 'environment', 'duration', 'catches', ...
   'catchesPerMin', 'medianTimeToCatch', 'fracCaughtWithin10s', 'catchSpeedVsChance', ...
   'pursuitIndex', 'chancePursuitIndex', 'medianTimeToNear', 'medianNearToCatch', ...
-  'landingsPerMin', 'distanceMovedPerMin', 'rewardVolume'};
+  'landingsPerMin', 'distanceMovedPerMin', 'rewardVolume', 'fracSpoutWithin10s', ...
+  'chanceFracSpoutWithin10s', 'medianSpoutLatency', 'chanceMedianSpoutLatency', 'mousePosition'};
 T = struct2table(rmfield(S, setdiff(fieldnames(S), cols)), 'AsArray', true);
 T = T(:, cols);
 disp(T(:, {'expRef', 'trainingStage', 'catches', 'catchesPerMin', 'medianTimeToCatch', ...
@@ -63,10 +71,14 @@ n = numel(S);
 x = 1:n;
 labels = cellfun(@(r) r(6:10), {S.expRef}, 'Uni', 0); % MM-DD
 sc = c.sessionColours(n);
-fig = figure('Name', [subject ': learning'], 'Color', 'w', 'Position', [60 60 1500 820]);
-tl = tiledlayout(fig, 2, 4, 'TileSpacing', 'compact', 'Padding', 'compact');
-title(tl, sprintf('%s: %d sessions, %s to %s', subject, n, S(1).expRef(1:10), S(end).expRef(1:10)), ...
-  'FontWeight', 'bold', 'Interpreter', 'none');
+fig = figure('Name', [subject ': learning'], 'Color', 'w', 'Position', [60 30 1300 1100]);
+tl = tiledlayout(fig, 3, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+ttl = sprintf('%s: %d sessions, %s to %s', subject, n, S(1).expRef(1:10), S(end).expRef(1:10));
+if any(strcmp({S.mousePosition}, 'video'))
+  ttl = {ttl, ['Pursuit, activity, spout: filled = mouse position from the video, open = from ' ...
+    'the touches (not comparable: the touch estimate is rougher)']};
+end
+title(tl, ttl, 'FontWeight', 'bold', 'Interpreter', 'none');
 
 ax = sessionAxes(tl, x, labels, S, c);
 plot(ax, x, [S.catchesPerMin], '-o', 'Color', c.mouse, 'MarkerFaceColor', c.mouse, 'LineWidth', 2);
@@ -88,11 +100,12 @@ errorbar(ax, x, mu, se, '-o', 'Color', c.mouse, 'MarkerFaceColor', c.mouse, 'Lin
 ylim(ax, [0 1]);
 ylabel(ax, 'P(random touches as fast)'); title(ax, 'Catch speed vs chance (lower = chasing)');
 
+isVideo = strcmp({S.mousePosition}, 'video');
 ax = sessionAxes(tl, x, labels, S, c);
-plot(ax, x, [S.chancePursuitIndex], '-o', 'Color', c.muted, 'MarkerFaceColor', c.muted, 'LineWidth', 2);
-plot(ax, x, [S.pursuitIndex], '-o', 'Color', c.mouse, 'MarkerFaceColor', c.mouse, 'LineWidth', 2);
-ylabel(ax, 'mean cos(heading to bug)'); title(ax, 'Pursuit: moving towards the bug');
-legend(ax, {'chance', 'mouse'}, 'Location', 'best', 'Box', 'off');
+yline(ax, 0, '--', 'chance', 'Color', c.muted, 'LabelHorizontalAlignment', 'right');
+byMethod(ax, x, [S.pursuitIndex] - [S.chancePursuitIndex], c.mouse, isVideo);
+ylabel(ax, 'pursuit index, mouse - chance');
+title(ax, sprintf('Pursuit: heading to the bug (bug < %g cm)', S(1).pursuitMaxDist));
 
 ax = sessionAxes(tl, x, labels, S, c);
 plot(ax, x, [S.medianTimeToNear], '-o', 'Color', c.mouse, 'MarkerFaceColor', c.mouse, 'LineWidth', 2);
@@ -102,9 +115,17 @@ legend(ax, {'appearance to near', 'near to catch'}, 'Location', 'best', 'Box', '
 ylim(ax, [0 max([S.medianTimeToNear S.medianNearToCatch]) * 1.2 + eps]);
 
 ax = sessionAxes(tl, x, labels, S, c);
-plot(ax, x, [S.distanceMovedPerMin], '-o', 'Color', c.mouse, 'MarkerFaceColor', c.mouse, 'LineWidth', 2);
-ylabel(ax, 'cm / min'); title(ax, 'Activity: distance moved (touches)');
+byMethod(ax, x, [S.distanceMovedPerMin], c.mouse, isVideo);
+ylabel(ax, 'cm / min'); title(ax, 'Activity: distance moved');
 ylim(ax, [0 max([S.distanceMovedPerMin]) * 1.2 + eps]);
+
+ax = sessionAxes(tl, x, labels, S, c);
+h1 = byMethod(ax, x, 100 * [S.chanceFracSpoutWithin10s], c.muted, isVideo);
+h2 = byMethod(ax, x, 100 * [S.fracSpoutWithin10s], c.mouse, isVideo);
+ylim(ax, [0 100]);
+ylabel(ax, '% at the spout within 10 s');
+title(ax, 'To the spout after a catch');
+legend(ax, [h1 h2], {'random times, as far from the spout', 'after catches'}, 'Location', 'best', 'Box', 'off');
 
 ax = nexttile(tl); hold(ax, 'on');
 for k = 1:n
@@ -113,7 +134,7 @@ for k = 1:n
 end
 xlabel(ax, 'time to catch (s)'); ylabel(ax, 'nearest paw to bug (cm)');
 title(ax, 'Approach before the catches');
-legend(ax, labels, 'Location', 'northwest', 'Box', 'off');
+legend(ax, labels, 'Location', 'southwest', 'Box', 'off');
 c.style(ax);
 
 ax = nexttile(tl); hold(ax, 'on');
@@ -150,6 +171,15 @@ end
 set(ax, 'XTick', x, 'XTickLabel', labels, 'XLim', [0.5 max(x) + 0.5]);
 xlabel(ax, 'session');
 c.style(ax);
+end
+
+function h = byMethod(ax, x, y, col, isVideo)
+%BYMETHOD Line through the sessions; markers filled where the mouse position
+%   came from the video, open where it came from the touches.
+h = plot(ax, x, y, '-', 'Color', col, 'LineWidth', 2, 'Marker', 'o', 'MarkerFaceColor', col, ...
+  'MarkerIndices', find(isVideo));
+plot(ax, x(~isVideo), y(~isVideo), 'o', 'Color', col, 'MarkerFaceColor', 'w', 'LineWidth', 2, ...
+  'HandleVisibility', 'off');
 end
 
 function placeStageLabels(fig)

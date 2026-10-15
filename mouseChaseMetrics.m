@@ -6,6 +6,13 @@ function S = mouseChaseMetrics(m, varargin)
 %     'nearDist'  cm, a paw this close to the bug counts as "at the bug" (5)
 %     'nShuffle'  time shifts of the bug for chance levels (20)
 %     'minShift'  s, smallest time shift (60)
+%     'pursuitMaxDist'  cm, heading/pursuit only while the bug is this close (15)
+%     'track'     video tracking (mouseChaseTrack): the mouse's body position
+%                 replaces the touch-based estimate
+%     'rewardPos' cm, where the reward spout is ([-20 3]: measured in the
+%                 video of the EB056 sessions, just past the left screen edge)
+%     'spoutDist' cm, the mouse is at the spout within this distance (see
+%                 mouseChaseMetrics>spoutVisits; default depends on 'track')
 %
 %   Chance levels: the bug's trajectory is shifted in time against the
 %   touches (circularly, over the times it was visible), which keeps where
@@ -28,7 +35,8 @@ function S = mouseChaseMetrics(m, varargin)
 %                (cm) and the touch-based mouse position estimate (cm)
 %     touches    touch events with times converted to block time
 
-o = struct('nearDist', 5, 'nShuffle', 20, 'minShift', 60);
+o = struct('nearDist', 5, 'nShuffle', 20, 'minShift', 60, 'pursuitMaxDist', 15, ...
+  'track', [], 'rewardPos', [-20 3], 'spoutDist', []);
 for k = 1:2:numel(varargin); o.(varargin{k}) = varargin{k+1}; end
 
 B = m.bug; % [time x y heading hidden alive threatLevel]
@@ -68,11 +76,18 @@ dC = hypot(Cx - B(Ci,2), Cy - B(Ci,3));
 nearest = accumarray(Ci, dC, [nB 1], @min, NaN);
 nearest(~alive) = NaN;
 
-%% Mouse position from the touches: mean of the footprints (landings) in
-% the last 0.5 s (paws in stance; a dragged tail moves rather than lands)
+%% Mouse position: from the video tracking if given (mouseChaseTrack),
+% otherwise from the touches: mean of the footprints (landings) in the last
+% 0.5 s (paws in stance; a dragged tail moves rather than lands)
 isLand = E(:,1) == 2;
 L = E(isLand,:);
-mouseXY = windowMean(L(:,7), L(:,3:4), B(:,1), 0.5);
+if ~isempty(o.track)
+  mouseXY = interp1(o.track.t, o.track.xy, B(:,1), 'linear', NaN);
+  S.mousePosition = 'video';
+else
+  mouseXY = windowMean(L(:,7), L(:,3:4), B(:,1), 0.5);
+  S.mousePosition = 'touches';
+end
 dtV = 0.3; % s, for the mouse's velocity
 prevXY = interp1(B(:,1), mouseXY, B(:,1) - dtV, 'linear', NaN);
 mouseV = (mouseXY - prevXY) / dtV;
@@ -123,25 +138,23 @@ rowL = rowL(okL);
 dLand = hypot(L(okL,3) - B(rowL,2), L(okL,4) - B(rowL,3));
 S.landings = [L(okL,7), L(okL,3:4), dLand];
 
-% Pursuit: does the mouse move towards the bug? cos(angle between the
-% mouse's heading and the direction to the bug), while it moves > 3 cm/s
+% Pursuit: does the mouse move towards the bug? The angle between the
+% mouse's heading and the direction to the bug, while it moves > 3 cm/s and
+% the bug is within pursuitMaxDist (further away it may not see or care)
 spd = hypot(mouseV(:,1), mouseV(:,2));
-okP = visible & spd > 3 & all(~isnan(mouseXY), 2);
-rowP = find(okP);
-cosTo = @(r) sum(mouseV(rowP,:) .* (B(r,2:3) - mouseXY(rowP,:)), 2) ./ ...
-  (spd(rowP) .* max(hypot(B(r,2) - mouseXY(rowP,1), B(r,3) - mouseXY(rowP,2)), eps));
-pursuit = cosTo(rowP);
-pursuitSh = nan(numel(shifts), 1);
-angTo = @(r) wrapToPiLocal(atan2(B(r,3) - mouseXY(rowP,2), B(r,2) - mouseXY(rowP,1)) - ...
-  atan2(mouseV(rowP,2), mouseV(rowP,1)));
+rowP = find(visible & spd > 3 & all(~isnan(mouseXY), 2));
+angTo = @(r) headingAngles(mouseXY(rowP,:), mouseV(rowP,:), B(r,2:3), o.pursuitMaxDist);
+angA = angTo(rowP);
 angSh = cell(numel(shifts), 1);
+pursuitSh = nan(numel(shifts), 1);
 for s = 1:numel(shifts)
-  r = shiftedRow(rowP, shifts(s));
-  pursuitSh(s) = mean(cosTo(r));
-  angSh{s} = angTo(r);
+  angSh{s} = angTo(shiftedRow(rowP, shifts(s)));
+  pursuitSh(s) = mean(cos(angSh{s}));
 end
 % angle between the mouse's heading and the bug (0 = heading straight at it)
-S.headingToBug = struct('actual', angTo(rowP), 'chance', vertcat(angSh{:}));
+S.headingToBug = struct('actual', angA, 'chance', vertcat(angSh{:}));
+pursuit = cos(angA);
+S.pursuitMaxDist = o.pursuitMaxDist;
 
 % Catch speed against chance: each trial's bug path is replayed against the
 % touches of other times (the whole session shifted circularly). How often
@@ -177,7 +190,7 @@ S.trials = tr;
 
 %% Aligned nearest-paw distance
 dtA = 1 / 30;
-tSp = 0:dtA:60;
+tSp = 0:dtA:90;
 tCa = -5:dtA:0;
 Asp = nan(nT, numel(tSp));
 Aca = nan(nT, numel(tCa));
@@ -192,6 +205,40 @@ for k = 1:nT
 end
 S.aligned = struct('tSpawn', tSp, 'spawn', Asp, 'tCatch', tCa, 'catch', Aca, ...
   'chanceDist', median(nearest(visible), 'omitnan'));
+
+%% Going to the reward spout after a catch
+% The mouse is at the spout when its position is within spoutDist of it.
+% From the touches the position can't go past the screen edge (the spout is
+% beyond it), hence a larger default distance than with video tracking.
+if isempty(o.spoutDist)
+  if isempty(o.track); o.spoutDist = 7; else; o.spoutDist = 6; end
+end
+dSpout = hypot(mouseXY(:,1) - o.rewardPos(1), mouseXY(:,2) - o.rewardPos(2));
+atSpout = dSpout <= o.spoutDist;
+maxWait = 30; % s
+latency = @(t0) spoutLatency(B(:,1), atSpout, t0, maxWait);
+tr.spoutLatency = nan(nT, 1);
+tr.spoutLatency(tr.caught) = latency(tr.tSpawn(tr.caught) + tr.timeToCatch(tr.caught));
+% chance: from random times at which the mouse was as far from the spout as
+% at a catch (+-2 cm) and not at it - at random times it is often already
+% there, while at a catch it has left the spout to catch the bug
+rs = RandStream('mt19937ar', 'Seed', 1);
+tCatch = tr.tSpawn(tr.caught) + tr.timeToCatch(tr.caught);
+dAtCatch = interp1(B(:,1), dSpout, tCatch);
+okT = B(:,1) >= tStart0(B, alive) & B(:,1) <= B(end,1) - maxWait & ~atSpout & ~isnan(dSpout);
+tRand = zeros(0, 1);
+for k = 1:numel(tCatch)
+  cand = find(okT & abs(dSpout - dAtCatch(k)) <= 2);
+  if isempty(cand); continue; end
+  tRand = [tRand; B(cand(randi(rs, numel(cand), 20, 1)),1)]; %#ok<AGROW>
+end
+latRand = latency(tRand);
+tAl = -5:dtA:20;
+alignedSpout = @(t0) interp1(B(:,1), dSpout, t0(:) + tAl, 'linear', NaN);
+S.spout = struct('pos', o.rewardPos, 'dist', o.spoutDist, 'tAligned', tAl, ...
+  'afterCatch', alignedSpout(K(:,1)), 'afterRandom', alignedSpout(tRand), ...
+  'latencyRandom', latRand, 'maxWait', maxWait, 'fracTimeAtSpout', mean(atSpout, 'omitnan'));
+S.trials = tr;
 
 %% Summary
 tStart = B(find(alive, 1),1); if isempty(tStart); tStart = B(1,1); end
@@ -213,6 +260,13 @@ both = tr.caught & ~isnan(tr.timeToNear);
 S.medianTimeToNear = median(tr.timeToNear(both));
 S.medianNearToCatch = median(tr.timeToCatch(both) - tr.timeToNear(both));
 S.catchSpeedVsChance = mean(tr.chanceFaster, 'omitnan'); % 0.5 = chance
+% to the spout: medians count "not within maxWait" as later than anything
+lc = tr.spoutLatency(tr.caught); lc(isnan(lc)) = Inf;
+lr = latRand; lr(isnan(lr)) = Inf;
+S.medianSpoutLatency = median(lc);
+S.chanceMedianSpoutLatency = median(lr);
+S.fracSpoutWithin10s = mean(lc <= 10);
+S.chanceFracSpoutWithin10s = mean(lr <= 10);
 S.landingsPerMin = sum(L(:,7) >= tStart) / S.duration * 60;
 S.medianLandingDist = median(dLand);
 S.pursuitIndex = mean(pursuit); % -1 away from the bug ... 1 straight at it
@@ -226,7 +280,7 @@ binMin = 5;
 edges = tStart + [0:binMin*60:S.duration, S.duration]; % last bin: the remainder
 edges = unique(edges);
 lenMin = diff(edges) / 60;
-keep = lenMin >= 1; % drop a last bin shorter than a minute
+keep = lenMin >= binMin / 2; % drop a last bin shorter than half a bin (noisy)
 cpm = histcounts(K(:,1), edges) ./ lenMin;
 S.binned = struct('binMin', binMin, 'tMin', (edges(keep) - tStart) / 60 + lenMin(keep) / 2, ...
   'catchesPerMin', cpm(keep));
@@ -323,8 +377,28 @@ unc = (sel(end) - sel(1)) / 2 + 0.0005;
 score = max(sc);
 end
 
-function a = wrapToPiLocal(a)
-a = mod(a + pi, 2 * pi) - pi;
+function t = tStart0(B, alive)
+t = B(find(alive, 1),1);
+if isempty(t); t = B(1,1); end
+end
+
+function lat = spoutLatency(t, atSpout, t0, maxWait)
+%SPOUTLATENCY Time from each t0 until the mouse is at the spout (0 if it
+%   already is; NaN if not within maxWait s).
+lat = nan(numel(t0), 1);
+for k = 1:numel(t0)
+  w = find(t >= t0(k) & t <= t0(k) + maxWait);
+  j = w(find(atSpout(w), 1));
+  if ~isempty(j); lat(k) = t(j) - t0(k); end
+end
+end
+
+function a = headingAngles(xy, v, bugXY, maxDist)
+%HEADINGANGLES Angle from the heading (velocity v) to the bug, for the rows
+%   where the bug is within maxDist of the mouse (position xy).
+d = bugXY - xy;
+near = hypot(d(:,1), d(:,2)) <= maxDist;
+a = mod(atan2(d(near,2), d(near,1)) - atan2(v(near,2), v(near,1)) + pi, 2 * pi) - pi;
 end
 
 function n = nAtOrBefore(t, q)

@@ -6,23 +6,30 @@ function S = plotMouseChase(source, varargin)
 %   asks for the file. S = PLOTMOUSECHASE(...) returns the measures of
 %   mouseChaseMetrics, plus the figure handle in S.figure.
 %   Options (name, value):
-%     'video'    true: also show video frames of a few catches
-%                (plotMouseChaseCatches; slow, reads the camera file)
+%     'video'    true: use the top camera video: the mouse's position from
+%                video tracking (mouseChaseTrack; the first time ~7 min per
+%                session, then cached) instead of from the touches, and a
+%                figure with video frames of a few catches
 %     'root'     subjects folder for finding EXPREF without Rigbox
 %     'saveDir'  save the figure(s) as PNG in this folder
 %   Other options are passed to mouseChaseMetrics.
 %
 %   One figure, read left to right, top to bottom:
-%     arena          where the mouse touched, the bug's path, the catches
+%     arena          where the mouse touched, the bug's path, the catches,
+%                    the reward spout
 %     catches        cumulative catches over the session
 %     time to catch  per trial (bug appearance to catch), running median
 %     trials         each row a trial: how close the nearest paw was to the
 %                    bug from its appearance on, until the catch (dot)
 %     approach       nearest paw distance in the seconds before the catches
-%     heading        where the mouse moves relative to the bug, vs chance
+%     heading        where the mouse moves relative to the bug (while it is
+%                    within 15 cm), compared with chance
 %     catch speed    per trial: how often touches from other times would
 %                    have caught this bug as fast (0.5 = chance)
-%     bug escape     (stages with fleeing) bug speed against threat level
+%     bug escape     (stages with fleeing) bug speed against threat level;
+%                    otherwise a summary
+%     to the spout   distance to the reward spout after the catches, and
+%                    how soon the mouse gets there, against random times
 
 o = struct('video', false, 'root', '', 'saveDir', '');
 mOpts = {};
@@ -33,6 +40,9 @@ end
 if nargin < 1; source = []; end
 [m, folder] = mouseChaseLoad(source, o.root);
 if isempty(m); S = []; return; end
+if o.video
+  mOpts = [mOpts, {'track', mouseChaseTrack(m, folder)}];
+end
 S = mouseChaseMetrics(m, mOpts{:});
 c = mouseChaseStyle();
 
@@ -43,11 +53,11 @@ fprintf(['  catch speed vs chance %.2f (0.5 = chance, lower = faster), pursuit i
   '(chance %.3f), touch clock: %s (+-%.3f s)\n'], S.catchSpeedVsChance, S.pursuitIndex, ...
   S.chancePursuitIndex, S.touchClock.method, S.touchClock.uncertainty);
 
-fig = figure('Name', [m.expRef ': session'], 'Color', 'w', 'Position', [80 60 1500 900]);
-tl = tiledlayout(fig, 3, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
-title(tl, sprintf('%s   stage %g   %d catches in %.0f min   %g ul water', m.expRef, ...
-  S.trainingStage, S.catches, S.duration / 60, S.rewardVolume), 'Interpreter', 'none', ...
-  'FontWeight', 'bold');
+fig = figure('Name', [m.expRef ': session'], 'Color', 'w', 'Position', [80 30 1500 1150]);
+tl = tiledlayout(fig, 4, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+title(tl, sprintf('%s   stage %g   %d catches in %.0f min   %g ul water   (mouse position: %s)', ...
+  m.expRef, S.trainingStage, S.catches, S.duration / 60, S.rewardVolume, S.mousePosition), ...
+  'Interpreter', 'none', 'FontWeight', 'bold');
 
 %% Arena
 ax = nexttile(tl, 1); hold(ax, 'on'); axis(ax, 'equal');
@@ -74,10 +84,13 @@ if ~isempty(K)
   scatter(ax, K(:,2), K(:,3), 40, c.catch, 'filled', 'MarkerEdgeColor', 'w', 'LineWidth', 1);
 end
 rectangle(ax, 'Position', [-half, dims], 'EdgeColor', c.axis, 'LineWidth', 1);
-set(ax, 'XLim', [-half(1) half(1)] * 1.15, 'YLim', [-half(2) half(2)] * 1.15, 'YDir', 'normal');
+sp = S.spout.pos;
+plot(ax, sp(1), sp(2), 'p', 'MarkerSize', 12, 'MarkerFaceColor', c.primary, 'MarkerEdgeColor', 'w');
+set(ax, 'XLim', [min(-half(1) * 1.15, sp(1) - 1.5) max(half(1) * 1.15, sp(1) + 1.5)], ...
+  'YLim', [min(-half(2) * 1.15, sp(2) - 1.5) max(half(2) * 1.15, sp(2) + 1.5)], 'YDir', 'normal');
 xlabel(ax, 'x (cm)'); ylabel(ax, 'y (cm)');
-title(ax, 'Arena: touches, bug path, catches');
-legendFor(ax, {'bug path', 'catch'}, {c.bug, c.catch}, {'-', 'o'});
+title(ax, 'Arena: touches, bug path, catches, spout');
+legendFor(ax, {'bug path', 'catch', 'spout'}, {c.bug, c.catch, c.primary}, {'-', 'o', 'p'});
 c.style(ax);
 
 %% Cumulative catches
@@ -139,13 +152,15 @@ e = linspace(-180, 180, 13); % 30 deg bins
 ctr = e(1:end-1) + diff(e) / 2;
 hA = histcounts(rad2deg(S.headingToBug.actual), e, 'Normalization', 'probability');
 hC = histcounts(rad2deg(S.headingToBug.chance), e, 'Normalization', 'probability');
-plot(ax, ctr, hC, 'Color', c.muted, 'LineWidth', 2);
-plot(ax, ctr, hA, 'Color', c.mouse, 'LineWidth', 2);
-xline(ax, 0, ':', 'Color', c.axis);
+bar(ax, ctr, 100 * (hA - hC), 1, 'FaceColor', c.mouse, 'EdgeColor', 'w', 'LineWidth', 2);
+yline(ax, 0, '-', 'Color', c.axis);
 set(ax, 'XLim', [-180 180], 'XTick', -180:90:180);
-xlabel(ax, 'bug direction relative to the mouse''s heading (deg)'); ylabel(ax, 'fraction of time');
-title(ax, sprintf('Heading: pursuit index %.3f (chance %.3f)', S.pursuitIndex, S.chancePursuitIndex));
-legend(ax, {'chance (bug shifted in time)', 'mouse'}, 'Location', 'south', 'Box', 'off');
+xlabel(ax, 'bug direction relative to the mouse''s heading (deg)');
+ylabel(ax, 'time, mouse - chance (% points)');
+title(ax, sprintf('Heading (bug < %g cm): pursuit index %.3f, chance %.3f', S.pursuitMaxDist, ...
+  S.pursuitIndex, S.chancePursuitIndex));
+text(ax, 0, 1, ' above 0 near 0 deg = heading for the bug', 'Units', 'normalized', ...
+  'VerticalAlignment', 'top', 'Color', c.muted, 'FontSize', 8);
 c.style(ax);
 
 %% Catch speed against chance, per trial
@@ -175,11 +190,45 @@ else
     sprintf('Paw landings      %.0f / min', S.landingsPerMin), ...
     sprintf('Moved (touches)   %.0f cm / min', S.distanceMovedPerMin), ...
     sprintf('Bug visible       %.0f%% of the time', 100 * S.fractionVisible), ...
+    sprintf('At the spout      %.0f%% of the time', 100 * S.spout.fracTimeAtSpout), ...
     '', 'The bug does not flee at this stage.', ...
     sprintf('Touch clock: %s (+-%.0f ms)', S.touchClock.method, 1000 * S.touchClock.uncertainty)};
   text(ax, 0, 1, txt, 'VerticalAlignment', 'top', 'FontName', 'Consolas', 'FontSize', 10, ...
     'Color', c.primary, 'Interpreter', 'none');
 end
+
+%% After the catch: to the spout
+Sp = S.spout;
+ax = nexttile(tl, 10, [1 2]); hold(ax, 'on');
+band(ax, Sp.tAligned, Sp.afterRandom, c.muted);
+band(ax, Sp.tAligned, Sp.afterCatch, c.mouse);
+yline(ax, Sp.dist, ':', 'at the spout', 'Color', c.secondary, 'LabelHorizontalAlignment', 'left');
+xline(ax, 0, '-', 'catch', 'Color', c.axis);
+xlabel(ax, 'time from the catch (or a matched random time: as far from the spout) (s)');
+ylabel(ax, 'mouse to spout (cm)');
+if strcmp(S.mousePosition, 'touches')
+  title(ax, {'After the catch: distance to the spout', ...
+    '(from the touches: rough near the spout, where the mouse is partly off the screen; ''video'', true is better)'});
+else
+  title(ax, 'After the catch: distance to the spout (mouse position from the video)');
+end
+legend(ax, flipud(findobj(ax, 'Type', 'line', 'Tag', 'mean')), {'random times', 'catches'}, ...
+  'Location', 'northeast', 'Box', 'off');
+xlim(ax, Sp.tAligned([1 end]));
+c.style(ax);
+
+ax = nexttile(tl, 12); hold(ax, 'on');
+tq = 0:0.5:Sp.maxWait;
+lc = S.trials.spoutLatency(S.trials.caught);
+cumFrac = @(l) mean(l(:) <= tq, 1); % NaN (not within maxWait) counts as never
+stairs(ax, tq, cumFrac(Sp.latencyRandom), 'Color', c.muted, 'LineWidth', 2);
+stairs(ax, tq, cumFrac(lc), 'Color', c.mouse, 'LineWidth', 2);
+ylim(ax, [0 1]);
+xlabel(ax, 'time (s)'); ylabel(ax, 'fraction at the spout by then');
+title(ax, sprintf('To the spout: median %.1f s after a catch (random times %.1f s)', ...
+  S.medianSpoutLatency, S.chanceMedianSpoutLatency));
+legend(ax, {'random times', 'catches'}, 'Location', 'southeast', 'Box', 'off');
+c.style(ax);
 
 S.figure = fig;
 if ~isempty(o.saveDir)
@@ -195,12 +244,22 @@ end
 %% ===================== Helpers =====================
 
 
+function band(ax, t, X, col)
+%BAND Mean +- s.e.m. over the rows of X.
+mu = mean(X, 1, 'omitnan');
+se = std(X, 0, 1, 'omitnan') ./ sqrt(sum(~isnan(X), 1));
+ok = ~isnan(mu) & ~isnan(se);
+fill(ax, [t(ok) fliplr(t(ok))], [mu(ok) - se(ok) fliplr(mu(ok) + se(ok))], col, ...
+  'FaceAlpha', 0.2, 'EdgeColor', 'none', 'HandleVisibility', 'off');
+plot(ax, t, mu, 'Color', col, 'LineWidth', 2, 'Tag', 'mean');
+end
+
 function legendFor(ax, names, cols, styles)
 %LEGENDFOR Legend from invisible proxy markers (so image layers don't show).
 h = gobjects(1, numel(names));
 for k = 1:numel(names)
-  if strcmp(styles{k}, 'o')
-    h(k) = plot(ax, NaN, NaN, 'o', 'MarkerFaceColor', cols{k}, 'MarkerEdgeColor', 'w', 'MarkerSize', 7);
+  if any(strcmp(styles{k}, {'o', 'p'}))
+    h(k) = plot(ax, NaN, NaN, styles{k}, 'MarkerFaceColor', cols{k}, 'MarkerEdgeColor', 'w', 'MarkerSize', 8);
   else
     h(k) = plot(ax, NaN, NaN, styles{k}, 'Color', cols{k}, 'LineWidth', 1.5);
   end

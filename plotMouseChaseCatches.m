@@ -15,9 +15,11 @@ function figs = plotMouseChaseCatches(source, varargin)
 %                 down 2x) into saveDir (default false)
 %     'saveDir'   save the figure (and clips) here
 %     'root'      subjects folder for finding EXPREF without Rigbox
+%     'rewardPos' spout position, cm ([-20 3], measured from the video)
+%   Frames are shown in screen centimetres, oriented like the other plots.
 
 o = struct('catches', [], 'offsets', [-2 -1 -0.5 -0.2 0], 'clips', false, 'saveDir', '', ...
-  'root', '');
+  'root', '', 'rewardPos', [-20 3]);
 args = varargin;
 if isstruct(source) % (m, folder, ...)
   m = source; folder = args{1}; args = args(2:end);
@@ -37,19 +39,31 @@ end
 B = m.bug;
 E = S.touches;
 
-% Crop to the screen (plus a margin) to see more
-crop = [min(V.screenCornersPx) - 20; max(V.screenCornersPx) + 20];
+% Frames are warped to screen centimetres, oriented as in the arena plot
+% (x right, y up), with a margin to show the walls and the spout
+half = m.geometry.dimsCm / 2;
+lim = [-half(1) - 3, half(1) + 3; -half(2) - 3, half(2) + 3];
+lim(1,1) = min(lim(1,1), o.rewardPos(1) - 2); lim(1,2) = max(lim(1,2), o.rewardPos(1) + 2);
+lim(2,1) = min(lim(2,1), o.rewardPos(2) - 2); lim(2,2) = max(lim(2,2), o.rewardPos(2) + 2);
+res = 0.1; % cm per pixel
+W.ref = imref2d(round(fliplr(diff(lim, 1, 2)') / res), lim(1,:), lim(2,:));
+W.tform = invert(V.H); % video px -> cm
+W.half = half;
+W.rewardPos = o.rewardPos;
 nC = numel(o.catches); nO = numel(o.offsets);
-fig = figure('Name', [m.expRef ': catches'], 'Color', 'w', 'Position', [60 40 230 * nO 240 * nC]);
+aspect = diff(lim(1,:)) / diff(lim(2,:));
+fig = figure('Name', [m.expRef ': catches'], 'Color', 'w', ...
+  'Position', [60 40 220 * aspect * nO 230 * nC]);
 tl = tiledlayout(fig, nC, nO, 'TileSpacing', 'tight', 'Padding', 'compact');
-title(tl, sprintf('%s: frames before catches (orange: logged bug, blue: touches)', m.expRef), ...
+title(tl, {sprintf('%s: frames before catches (orange: logged bug, blue: touches, + spout)', m.expRef), ...
+  'At 0 s the bug may still be on screen: the display takes a frame or two to update'}, ...
   'Interpreter', 'none');
 for i = 1:nC
   k = o.catches(i);
   for j = 1:nO
     t = K(k,1) + o.offsets(j);
     ax = nexttile(tl);
-    drawFrame(ax, V, t, B, E, crop, m, c);
+    drawFrame(ax, V, W, t, B, E, m, c);
     if j == 1; ylabel(ax, sprintf('catch %d (%.1f min)', k, (K(k,1) - S.tStart) / 60)); end
     if i == 1; title(ax, sprintf('%+.1f s', o.offsets(j))); end
   end
@@ -62,7 +76,7 @@ end
 
 %% Clips
 if o.clips
-  cf = figure('Color', 'k', 'Position', [100 100 560 600], 'Visible', 'off');
+  cf = figure('Color', 'k', 'Position', [100 100 round(560 * aspect) 600], 'Visible', 'off');
   ax = axes(cf, 'Position', [0 0 1 0.93]);
   for k = o.catches
     file = fullfile(o.saveDir, sprintf('%s_catch%02d.mp4', m.expRef, k));
@@ -72,7 +86,7 @@ if o.clips
     fr = V.frameIndex(K(k,1) - 3):V.frameIndex(K(k,1) + 1);
     for f = fr
       t = V.camTimes(f) - V.blockToCam;
-      drawFrame(ax, V, t, B, E, crop, m, c);
+      drawFrame(ax, V, W, t, B, E, m, c);
       title(ax, sprintf('catch %d   %+.2f s', k, t - K(k,1)), 'Color', 'w');
       writeVideo(w, getframe(cf));
     end
@@ -83,17 +97,24 @@ if o.clips
 end
 end
 
-function drawFrame(ax, V, t, B, E, crop, m, c)
+function drawFrame(ax, V, W, t, B, E, m, c)
+%DRAWFRAME The video frame at block time t in screen cm (x right, y up),
+%   with the logged bug and the touches on top.
 cla(ax);
-I = V.readFrame(t);
-imshow(I, 'Parent', ax); hold(ax, 'on');
+J = imwarp(V.readFrame(t), W.tform, 'OutputView', W.ref, 'FillValues', 0);
+imagesc(ax, W.ref.XWorldLimits, W.ref.YWorldLimits, J); % row 1 = lowest y
+colormap(ax, gray(256)); clim(ax, [0 255]);
+hold(ax, 'on');
+set(ax, 'YDir', 'normal', 'XTick', [], 'YTick', [], 'XLim', W.ref.XWorldLimits, ...
+  'YLim', W.ref.YWorldLimits, 'DataAspectRatio', [1 1 1]);
+rectangle(ax, 'Position', [-W.half, 2 * W.half], 'EdgeColor', [1 1 1 0.3]);
+plot(ax, W.rewardPos(1), W.rewardPos(2), '+', 'Color', c.catch, 'MarkerSize', 8, 'LineWidth', 1.5);
 % bug: last logged position at or before t, if alive
 r = find(B(:,1) <= t, 1, 'last');
 if ~isempty(r) && B(r,6)
   a = linspace(0, 2 * pi, 40)';
   ring = B(r,2:3) + (m.params.bugLength / 2 + 1) * [cos(a) sin(a)]; % cm, around the bug
-  p = transformPointsForward(V.H, ring);
-  plot(ax, p(:,1), p(:,2), 'Color', c.bug, 'LineWidth', 1.5);
+  plot(ax, ring(:,1), ring(:,2), 'Color', c.bug, 'LineWidth', 1.5);
 end
 % contacts down at t: the last event of each contact (within 0.25 s) is not a lift
 recent = E(E(:,7) <= t & E(:,7) > t - 0.25,:);
@@ -102,9 +123,7 @@ if ~isempty(recent)
   down = recent(last, :);
   down = down(down(:,1) ~= 4, :);
   if ~isempty(down)
-    p = transformPointsForward(V.H, down(:,3:4));
-    plot(ax, p(:,1), p(:,2), '.', 'MarkerSize', 16, 'Color', c.mouse);
+    plot(ax, down(:,3), down(:,4), '.', 'MarkerSize', 16, 'Color', c.mouse);
   end
 end
-set(ax, 'XLim', crop(:,1)', 'YLim', crop(:,2)');
 end
