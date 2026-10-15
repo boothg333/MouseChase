@@ -35,12 +35,15 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %
 %   High-rate data is logged by the task itself and saved at the end of the
 %   session next to the block file, as <expRef>_MouseChase.mat (variable
-%   'mouseChase'), with times on the same clock as the block's events:
+%   'mouseChase'), with times on the same clock as the block's events
+%   (except the touch events):
 %     bug          [time x y heading hidden alive threatLevel] every update
 %                  (s, cm, rad, 0-1)
 %     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
-%                  3 move, 4 end; cm, s)
+%                  3 move, 4 end; cm, s in GetSecs, see clockSync)
 %     catchLog     [time x y rewarded] at each catch
+%     clockSync    [blockTime GetSecs] every update, to convert the touch
+%                  times to block time
 %     plus the environment, screen geometry and the final parameters.
 
 %% Shared, mutable context (touch queue, screen geometry)
@@ -409,6 +412,8 @@ end
 
 function logUpdate(ctx, s, P, env)
 appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel]);
+% Touch times are in GetSecs, the rest in block time: log both clocks
+appendLog(ctx, 'logClock', [s.t GetSecs]);
 if ~isempty(s.touchEvents); appendLog(ctx, 'logTouch', s.touchEvents); end
 if ~isKey(ctx, 'catchesLogged'); ctx('catchesLogged') = 0; end
 if s.catchCount > ctx('catchesLogged')
@@ -464,6 +469,8 @@ mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'touchEventColumns', {{'type', 'id', 'x', 'y', 'w', 'h', 'time'}}, ...
   'catchLog', getLog(ctx, 'logCatch', 4), ...
   'catchColumns', {{'time', 'x', 'y', 'rewarded'}}, ...
+  'clockSync', getLog(ctx, 'logClock', 2), ...
+  'clockSyncColumns', {{'blockTime', 'GetSecs'}}, ...
   'environment', [], 'params', [], 'geometry', geometry(ctx));
 if isKey(ctx, 'env'); mouseChase.environment = ctx('env'); end
 if isKey(ctx, 'params'); mouseChase.params = ctx('params'); end
