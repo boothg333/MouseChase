@@ -207,8 +207,10 @@ delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicit
   function checkVisual()
     names = fieldnames(visual);
     fprintf('Visual layers (%d): %s\n', numel(names), strjoin(names', ', '));
-    bl = layerOf('b_bug');
-    fprintf('        bug layer: show %d, size %s deg, offset %s deg\n', bl.show, mat2str(bl.size(:)', 3), mat2str(bl.texOffset(:)', 3));
+    bl = layerOf('b_bug'); % Gabor: [window, grating]
+    fprintf('        bug layers: %d, window show %d, size %s deg, offset %s deg; grating %s, phase tied to bug %d\n', ...
+      numel(bl), bl(1).show, mat2str(bl(1).size(:)', 3), mat2str(bl(1).texOffset(:)', 3), ...
+      bl(2).textureId, abs(bl(2).texOffset(1) - bl(1).texOffset(1)) < 1e-9);
     rl = layerOf('c_rect01');
     fprintf('        rock layer: show %d, size %s deg\n', rl.show, mat2str(rl.size(:)', 3));
     fl = layerOf('a_floor');

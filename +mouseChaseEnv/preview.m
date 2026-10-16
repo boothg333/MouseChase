@@ -83,7 +83,7 @@ end
 
 function [len, wid] = bugSize(stage)
 % Bug size per training stage, as in MouseChaseTouch's stageValues
-sizes = [4.0 1.6; 3.5 1.4; 3.0 1.2; 2.6 1.0; 2.4 0.9];
+sizes = [6.0 2.4; 5.25 2.1; 4.5 1.8; 3.9 1.5; 3.6 1.35];
 row = sizes(min(max(round(stage), 1), 5), :);
 len = row(1); wid = row(2);
 end

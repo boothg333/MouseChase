@@ -37,6 +37,8 @@ for k = 1:1800
   if ~b(5); continue; end
   L = visual.b_bug.Node.CurrValue.layers;
   if isobject(L); L = L.Node.CurrValue; end
+  L = L(1); % the Gabor's window layer: positioned and rotated like the bug
+  if ~L.show; continue; end % out of sight: drawing parked, nothing to check
   want = [b(1) / cpp(1) + W/2, H/2 - b(2) / cpp(2)];
   got = texPointPx(L.texOffset, L.texAngle, [0 0]);
   maxPosErr = max(maxPosErr, norm(got - want));

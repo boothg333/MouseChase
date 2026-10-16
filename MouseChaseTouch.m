@@ -66,7 +66,8 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
-  'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', 'maxCatchContactSize'};
+  'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
+  'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -137,15 +138,16 @@ visStim.a_floor = floorElem;
 % skipRepeats: while the bug can't be seen its drawing stays the same, so
 % Rigbox doesn't redraw (e.g. during the respawn delay, when trial changes
 % and reward delivery keep the PC busy)
-bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats().subscriptable();
-bug = vis.patch(t, 'circle');
-bug.azimuth = bugDraw.azimuth;
-bug.altitude = bugDraw.altitude;
-bug.dims = bugDraw.dims;
-bug.orientation = bugDraw.orientation;
-bug.colour = p.bugColour;
-bug.show = bugDraw.show;
-visStim.b_bug = bug;
+% The bug is a Gabor patch: a Gaussian window (elongated to the bug's
+% length and width) over a grating, both turning with its heading. Built
+% from Rigbox's gaussianLayer/sinusoidLayer like vis.grating, but with a
+% rotating window and the grating's phase tied to the bug's centre, so the
+% stripes move with the bug. (scan, seeded with empty hidden layers: Rigbox
+% reads the layers when the experiment starts)
+bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats();
+bugElem = t.Node.Net.subscriptableOrigin('bug');
+bugElem.layers = bugDraw.map(@bugLayers).scan(@(~, l) l, vis.emptyLayer(2));
+visStim.b_bug = bugElem;
 
 % Fixed pools of rectangle and ellipse patches; the environment decides
 % how many are shown and where.
@@ -191,7 +193,7 @@ try
   p.rewardProbability = NaN; % chance that a catch is rewarded (NaN: from the stage)
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
-  p.environment = 'default'; % name of a MouseChaseEnvironments/<name>.mat
+  p.environment = 'grass';   % name of a MouseChaseEnvironments/<name>.mat ('default': plain grey)
   p.trainingStage = 1;       % 1 (naive mouse) ... 5 (expert): sets the NaN values below
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
@@ -202,7 +204,9 @@ try
   p.respawnDelay = 2;        % s the bug stays away after a catch
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
-  p.bugColour = [0 0 0]';
+  p.gaborCycles = 2;         % grating cycles along the bug's length
+  p.gaborContrast = 1.5;     % 1 = stripes from black to white; >1 saturates them (bolder)
+  p.gaborColour = [1 1 1]';  % colour of the bright stripes (dark ones are black)
   p.visualRange = NaN;       % cm, distance at which contacts can scare the bug
   p.threatSpeed = NaN;       % cm/s towards the bug at which it starts reacting
   p.fullThreatSpeed = NaN;   % cm/s towards the bug for the full reaction
@@ -260,11 +264,11 @@ function v = stageValues(stage)
 %   rewardSize in ul; hidingObjects 0 = the environment's objects (rocks
 %   etc.) are left out, 1 = included.
 %            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects
-ladder = [   4.0       1.6      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
-             3.5       1.4      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
-             3.0       1.2      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
-             2.6       1.0      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
-             2.4       0.9      1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
+ladder = [   6.0       2.4      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
+             5.25      2.1      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
+             4.5       1.8      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
+             3.9       1.5      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
+             3.6       1.35     1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
 names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
   'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
   'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects'};
@@ -487,7 +491,11 @@ mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'clockSync', getLog(ctx, 'logClock', 2), ...
   'clockSyncColumns', {{'blockTime', 'GetSecs'}}, ...
   'environment', [], 'params', [], 'geometry', geometry(ctx));
-if isKey(ctx, 'env'); mouseChase.environment = ctx('env'); end
+if isKey(ctx, 'env')
+  % without the floor image (MBs for photos); env.floor keeps how it was made
+  mouseChase.environment = ctx('env');
+  mouseChase.environment.floorImage = [];
+end
 if isKey(ctx, 'params'); mouseChase.params = ctx('params'); end
 dirs = getenv('MOUSECHASE_LOG_DIR'); % set by tools/simulation (pathsep-separated)
 if isempty(dirs)
@@ -787,15 +795,50 @@ P = applyStage(P);
 % Out of sight (respawning, or wholly beyond the screen edge): a constant
 % hidden layer, so nothing needs redrawing
 visible = s.alive && all(abs(s.pos) <= g.dimsCm / 2 + P.bugLength / 2);
-if ~visible
-  d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, ...
-    'dims', [1; 1], 'show', false);
-  return
-end
+d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, 'dims', [1; 1], ...
+  'cycles', P.gaborCycles, 'contrast', P.gaborContrast, ...
+  'colour', P.gaborColour(:), 'show', false);
+if ~visible; return; end
 d.orientation = mod(s.heading * 180 / pi, 360);
 [d.azimuth, d.altitude, k] = patchPosition(s.pos, d.orientation, g);
 d.dims = k * [P.bugLength; P.bugWidth];
 d.show = true;
+end
+
+function layers = bugLayers(d)
+%BUGLAYERS The bug as a Gabor patch: a Gaussian window layer (drawn first,
+%   into the alpha channel only, as a stencil) and a grating layer blended
+%   through it, as in vis.grating. Both are rotated to the heading
+%   (d.orientation) and offset by the pre-rotated position from
+%   patchPosition. For the grating that offset also fixes its phase at the
+%   bug's centre (a bright stripe through the middle), so the stripes move
+%   and turn with the bug. The grating varies along the body axis, i.e.
+%   stripes run across the bug like body segments.
+%   The window's sigma is a quarter of the bug's length and width, so it
+%   fades out (to 14% contrast) at the bug's edge.
+[win, winImg] = vis.gaussianLayer([d.azimuth; d.altitude], d.dims / 4);
+win.textureId = 'gaussianStencil';
+win.texAngle = d.orientation;
+[win.rgba, win.rgbaSize] = vis.rgba(0, winImg);
+win.blending = 'none';
+win.colourMask = [false false false true]';
+win.show = d.show;
+
+wavelength = d.dims(1) / d.cycles; % deg
+[grating, gratingImg] = vis.sinusoidLayer(0, 1 / wavelength, 0, d.orientation);
+grating.textureId = 'sinusoidGrating';
+grating.texOffset = [d.azimuth; 0]; % phase tied to the bug's centre
+[grating.rgba, grating.rgbaSize] = vis.rgba(gratingImg, 1);
+grating.blending = 'destination';
+% Contrast above 1 pushes these below 0 / above 1; the graphics card clips
+% the result, giving saturated black and white stripes
+lo = 0.5 - 0.5 * d.contrast;
+hi = 0.5 + 0.5 * d.contrast;
+grating.minColour = lo .* [d.colour; 0];
+grating.maxColour = hi .* [d.colour; 1];
+grating.show = d.show;
+
+layers = [win, grating];
 end
 
 function layer = floorLayer(env, ctx)
