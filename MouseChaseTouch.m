@@ -4,10 +4,13 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   from moving touches. Touches come from the multi-touch overlay (paws,
 %   tail), read by tools/touchReader.ps1 in the background (Windows raw
 %   input, no Psychtoolbox touch support needed).
-%   When any contact lands within p.catchRadius of the visible bug, the
-%   trial ends, a reward of p.rewardSize ul is delivered with probability
-%   p.rewardProbability, and the bug respawns from the screen edge after
-%   p.respawnDelay seconds.
+%   When any contact lands within p.catchRadius of the visible bug, it is
+%   caught: for p.caughtDuration seconds it freezes, grows to p.caughtGrowth
+%   times its size and its stripes swap black and white p.caughtFlashRate
+%   times a second (as full cycles). Half way through, a reward of
+%   p.rewardSize ul is delivered with probability p.rewardProbability; at
+%   the end the bug disappears, the trial ends, and the bug respawns from
+%   the screen edge after p.respawnDelay seconds.
 %
 %   One trial = one catch, and the game reads the current trial's
 %   parameters, so trial types (e.g. bug difficulty) can be made with
@@ -29,7 +32,7 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   Events (in the block file, and shown live in mc; kept low-rate, as
 %   Rigbox sends every event update to mc):
 %     catches      catch count, updating at each catch
-%     rewarded     at each catch: true if it was rewarded
+%     rewarded     half way through each catch: true if it was rewarded
 %     evading      true while the bug is fleeing
 %     environment  name of the environment
 %
@@ -37,11 +40,12 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   session next to the block file, as <expRef>_MouseChase.mat (variable
 %   'mouseChase'), with times on the same clock as the block's events
 %   (except the touch events):
-%     bug          [time x y heading hidden alive threatLevel] every update
-%                  (s, cm, rad, 0-1)
+%     bug          [time x y heading hidden alive threatLevel caught] every
+%                  update (s, cm, rad, 0-1; caught: frozen after a catch)
 %     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
 %                  3 move, 4 end; cm, s in GetSecs, see clockSync)
-%     catchLog     [time x y rewarded] at each catch
+%     catchLog     [time x y rewarded] at each catch (the reward itself
+%                  follows p.caughtDuration / 2 later)
 %     catchContact [id x y w h age] of the contact that made each catch
 %                  (cm, s; a large or old contact is likely the tail)
 %     clockSync    [blockTime GetSecs] every update, to convert the touch
@@ -67,7 +71,8 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
   'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
-  'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize'};
+  'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize', ...
+  'caughtDuration', 'caughtGrowth', 'caughtFlashRate'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -86,7 +91,8 @@ tick = t.map2(p.updateRate, @(x, rate) floor(x * rate)).skipRepeats();
 tRun = t.at(tick).keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
-  'catchCount', 0, 'lastCatchRewarded', false, 'lastRewardSize', 0, ...
+  'catchCount', 0, 'rewardCount', 0, 'trialCount', 0, 'caught', false, 'caughtAt', -inf, ...
+  'lastCatchRewarded', false, 'lastRewardSize', 0, ...
   'lastCatchContact', nan(1, 6), 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
   'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
@@ -95,12 +101,17 @@ state = tRun.scan(@(s, tNow, P, e, ref) updateGame(s, tNow, P, e, ref, ctx), see
   'pars', p, env, events.expStart).subscriptable();
 
 %% Catches, reward, trials and stopping
+% A catch starts the caught animation; the reward comes half way through
+% it and the trial ends when it's over (so the next trial's parameters
+% don't change the bug mid-animation). Each stage has its own count.
 catchCount = state.catchCount.skipRepeats();
-catchEvent = catchCount.keepWhen(catchCount > 0);
-events.endTrial = catchEvent;
-events.catches = catchEvent;
+events.catches = catchCount.keepWhen(catchCount > 0);
+trialCount = state.trialCount.skipRepeats();
+events.endTrial = trialCount.keepWhen(trialCount > 0);
+rewardCount = state.rewardCount.skipRepeats();
+rewardEvent = rewardCount.keepWhen(rewardCount > 0);
 % Whether a catch is rewarded is drawn in updateGame (p.rewardProbability)
-rewarded = state.lastCatchRewarded.at(catchEvent);
+rewarded = state.lastCatchRewarded.at(rewardEvent);
 events.rewarded = rewarded;
 % The reward size (ul) comes from the game state, where the training stage
 % has been applied; only fires when rewarded is true
@@ -138,12 +149,12 @@ visStim.a_floor = floorElem;
 % skipRepeats: while the bug can't be seen its drawing stays the same, so
 % Rigbox doesn't redraw (e.g. during the respawn delay, when trial changes
 % and reward delivery keep the PC busy)
-% The bug is a Gabor patch: a Gaussian window (elongated to the bug's
+% The bug is a striped ellipse: a sharp-edged elliptical window (the bug's
 % length and width) over a grating, both turning with its heading. Built
-% from Rigbox's gaussianLayer/sinusoidLayer like vis.grating, but with a
-% rotating window and the grating's phase tied to the bug's centre, so the
-% stripes move with the bug. (scan, seeded with empty hidden layers: Rigbox
-% reads the layers when the experiment starts)
+% like Rigbox's vis.grating, but with a rotating window and the grating's
+% phase tied to the bug's centre, so the stripes move with the bug. (scan,
+% seeded with empty hidden layers: Rigbox reads the layers when the
+% experiment starts)
 bugDraw = state.map2(p, @(s, P) bugToDraw(s, P, ctx)).skipRepeats();
 bugElem = t.Node.Net.subscriptableOrigin('bug');
 bugElem.layers = bugDraw.map(@bugLayers).scan(@(~, l) l, vis.emptyLayer(2));
@@ -201,11 +212,14 @@ try
   p.maxCatchContactSize = Inf; % cm, larger contacts (width or height) can't catch: a dragged tail
                              % shows as a large contact, a paw strike as a small one (1.3 rejected
                              % ~40% of tail catches and no paw catches in EB056's videos)
-  p.respawnDelay = 2;        % s the bug stays away after a catch
+  p.caughtDuration = 2;      % s a caught bug stays frozen and flashing (reward half way)
+  p.caughtGrowth = 1.5;      % size of the caught bug, relative to its normal size
+  p.caughtFlashRate = 3;     % Hz, black-white-black cycles of the caught bug's stripes
+  p.respawnDelay = 2;        % s the bug stays away after the caught animation
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
-  p.gaborCycles = 2;         % grating cycles along the bug's length
-  p.gaborContrast = 1.5;     % 1 = stripes from black to white; >1 saturates them (bolder)
+  p.gaborCycles = 3;         % grating cycles along the bug's length
+  p.gaborContrast = 4;       % 1 = smooth sinusoid from black to white; higher saturates it into sharper stripes
   p.gaborColour = [1 1 1]';  % colour of the bright stripes (dark ones are black)
   p.visualRange = NaN;       % cm, distance at which contacts can scare the bug
   p.threatSpeed = NaN;       % cm/s towards the bug at which it starts reacting
@@ -294,8 +308,12 @@ end
 dt = min(max(tNow - s.t, 0), 0.1); % cap to avoid jumps after a stall
 s.t = tNow;
 [s.contacts, s.touchEvents] = pollTouches(ctx);
-s.stop = s.catchCount >= P.targetCatches || tNow - s.tStart >= P.maxDuration;
+s.stop = s.trialCount >= P.targetCatches || tNow - s.tStart >= P.maxDuration;
 
+if s.caught
+  s = stepCaught(s, tNow, P);
+  return
+end
 if ~s.alive
   s.evading = false;
   s.threatLevel = 0;
@@ -405,7 +423,8 @@ if hitWall
   s.vel = [0 0];
 end
 
-% Catch: any contact on the visible bug (not too large: see maxCatchContactSize)
+% Catch: any contact on the visible bug (not too large: see
+% maxCatchContactSize) starts the caught animation
 onBug = [];
 if ~s.hidden && nC > 0
   onBug = find(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius & ...
@@ -416,8 +435,27 @@ if ~isempty(onBug)
   s.catchCount = s.catchCount + 1;
   s.lastCatchRewarded = rand() < P.rewardProbability;
   s.lastRewardSize = P.rewardSize;
-  s.alive = false;
+  s.caught = true;
+  s.caughtAt = tNow;
+  s.vel = [0 0];
   s.evading = false;
+  s.threatLevel = 0;
+end
+end
+
+function s = stepCaught(s, tNow, P)
+%STEPCAUGHT The caught bug stays frozen (bugToDraw makes it grow and
+%   flash). The reward is due half way through, and at the end the bug
+%   disappears and the trial ends.
+elapsed = tNow - s.caughtAt;
+if s.rewardCount < s.catchCount && elapsed >= P.caughtDuration / 2
+  s.rewardCount = s.catchCount;
+end
+if elapsed >= P.caughtDuration
+  s.rewardCount = s.catchCount; % (in case caughtDuration is 0)
+  s.trialCount = s.catchCount;
+  s.caught = false;
+  s.alive = false;
   s.respawnAt = tNow + P.respawnDelay;
 end
 end
@@ -427,7 +465,7 @@ end
 % mc, which costs time during the session) and is saved by finishSession.
 
 function logUpdate(ctx, s, P, env)
-appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel]);
+appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel s.caught]);
 % Touch times are in GetSecs, the rest in block time: log both clocks
 appendLog(ctx, 'logClock', [s.t GetSecs]);
 if ~isempty(s.touchEvents); appendLog(ctx, 'logTouch', s.touchEvents); end
@@ -480,8 +518,8 @@ if isKey(ctx, 'saved'); return; end
 ctx('saved') = true;
 releaseTouch(ctx);
 mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
-  'bug', getLog(ctx, 'logBug', 7), ...
-  'bugColumns', {{'time', 'x', 'y', 'heading', 'hidden', 'alive', 'threatLevel'}}, ...
+  'bug', getLog(ctx, 'logBug', 8), ...
+  'bugColumns', {{'time', 'x', 'y', 'heading', 'hidden', 'alive', 'threatLevel', 'caught'}}, ...
   'touchEvents', getLog(ctx, 'logTouch', 7), ...
   'touchEventColumns', {{'type', 'id', 'x', 'y', 'w', 'h', 'time'}}, ...
   'catchLog', getLog(ctx, 'logCatch', 4), ...
@@ -797,29 +835,41 @@ P = applyStage(P);
 visible = s.alive && all(abs(s.pos) <= g.dimsCm / 2 + P.bugLength / 2);
 d = struct('orientation', 0, 'azimuth', 0, 'altitude', 0, 'dims', [1; 1], ...
   'cycles', P.gaborCycles, 'contrast', P.gaborContrast, ...
-  'colour', P.gaborColour(:), 'show', false);
+  'colour', P.gaborColour(:), 'reversed', false, 'show', false);
 if ~visible; return; end
 d.orientation = mod(s.heading * 180 / pi, 360);
 [d.azimuth, d.altitude, k] = patchPosition(s.pos, d.orientation, g);
 d.dims = k * [P.bugLength; P.bugWidth];
+if s.caught
+  % Grows to caughtGrowth over the first quarter of the animation, while
+  % the stripes swap colour twice per caughtFlashRate cycle
+  elapsed = s.t - s.caughtAt;
+  grow = min(1, elapsed / max(P.caughtDuration / 4, eps));
+  d.dims = d.dims * (1 + (P.caughtGrowth - 1) * grow);
+  d.reversed = mod(floor(elapsed * 2 * P.caughtFlashRate), 2) == 1;
+end
 d.show = true;
 end
 
 function layers = bugLayers(d)
-%BUGLAYERS The bug as a Gabor patch: a Gaussian window layer (drawn first,
-%   into the alpha channel only, as a stencil) and a grating layer blended
-%   through it, as in vis.grating. Both are rotated to the heading
+%BUGLAYERS The bug as a striped ellipse: an elliptical window layer (drawn
+%   first, into the alpha channel only, as a stencil) and a grating layer
+%   blended through it, as in vis.grating. Both are rotated to the heading
 %   (d.orientation) and offset by the pre-rotated position from
 %   patchPosition. For the grating that offset also fixes its phase at the
 %   bug's centre (a bright stripe through the middle), so the stripes move
 %   and turn with the bug. The grating varies along the body axis, i.e.
 %   stripes run across the bug like body segments.
-%   The window's sigma is a quarter of the bug's length and width, so it
-%   fades out (to 14% contrast) at the bug's edge.
-[win, winImg] = vis.gaussianLayer([d.azimuth; d.altitude], d.dims / 4);
-win.textureId = 'gaussianStencil';
+%   The window is a sharp-edged ellipse the bug's length and width, so the
+%   stripes keep full contrast up to the bug's outline.
+win = vis.emptyLayer();
+win.textureId = 'bugEllipseStencil';
+win.texOffset = [d.azimuth; d.altitude];
 win.texAngle = d.orientation;
-[win.rgba, win.rgbaSize] = vis.rgba(0, winImg);
+win.size = d.dims;
+win.isPeriodic = false; % transparent outside the ellipse
+win.interpolation = 'linear'; % smooths the outline's pixels
+[win.rgba, win.rgbaSize] = ellipseStencil();
 win.blending = 'none';
 win.colourMask = [false false false true]';
 win.show = d.show;
@@ -834,11 +884,30 @@ grating.blending = 'destination';
 % the result, giving saturated black and white stripes
 lo = 0.5 - 0.5 * d.contrast;
 hi = 0.5 + 0.5 * d.contrast;
-grating.minColour = lo .* [d.colour; 0];
-grating.maxColour = hi .* [d.colour; 1];
+if d.reversed % caught bug flashing: black and white stripes swapped
+  [lo, hi] = deal(hi, lo);
+end
+grating.minColour = [lo .* d.colour; 0];
+grating.maxColour = [hi .* d.colour; 1];
 grating.show = d.show;
 
 layers = [win, grating];
+end
+
+function [rgba, sz] = ellipseStencil()
+%ELLIPSESTENCIL Texture of a filled ellipse (alpha 1 inside, 0 outside),
+%   with a one-texel soft outline against jagged edges. Made once: it's the
+%   same for every update.
+persistent cache
+if isempty(cache)
+  n = 256;
+  c = linspace(-1 + 1/n, 1 - 1/n, n); % texel centres
+  [xx, yy] = meshgrid(c, c);
+  alpha = min(max((1 - hypot(xx, yy)) * n / 2 + 0.5, 0), 1);
+  [cache.rgba, cache.sz] = vis.rgba(0, alpha);
+end
+rgba = cache.rgba;
+sz = cache.sz;
 end
 
 function layer = floorLayer(env, ctx)

@@ -108,24 +108,47 @@ sp = hypot(diff(B(:,1)), diff(B(:,2))) / dt;
 fprintf('Trial params: wanderThrust %g -> %g, median wander speed now %.1f cm/s\n', ...
   pars.wanderThrust, fast.wanderThrust, median(sp(B(2:end,5) == 1)));
 
-%% 4. A still touch landing on the visible bug catches it
+%% 4. A still touch landing on the visible bug catches it: it freezes,
+% grows and flashes for caughtDuration, with the reward half way through
 for c = 1:pars.targetCatches
   waitVisible();
   b = events.bug.Node.CurrValue'; % column -> row
+  trials0 = events.endTrial.Node.CurrValue; % (the threat test may have caught it already)
+  if isempty(trials0); trials0 = 0; end
   touch(2, 20 + c, b(1:2));
   step();
   touch(4, 20 + c, b(1:2));
   step();
+  a0 = events.bug.Node.CurrValue'; % column -> row
+  bl = layerOf('b_bug');
+  size0 = bl(1).size(1);
+  nRewarded0 = numel(rewardedFlags);
+  tReward = NaN; maxMove = 0; maxGrowth = 1; flips = 0; lastLo = bl(2).minColour(1);
+  nSteps = round(pars.caughtDuration / dt);
+  for k = 1:nSteps - 2 % (up to just before the animation ends)
+    step();
+    a = events.bug.Node.CurrValue'; % column -> row
+    maxMove = max(maxMove, hypot(a(1) - a0(1), a(2) - a0(2)));
+    bl = layerOf('b_bug');
+    maxGrowth = max(maxGrowth, bl(1).size(1) / size0);
+    flips = flips + (bl(2).minColour(1) ~= lastLo);
+    lastLo = bl(2).minColour(1);
+    if isnan(tReward) && numel(rewardedFlags) > nRewarded0; tReward = (k + 1) * dt; end
+  end
+  if c == 1
+    fprintf(['Catch 1: catches=%s, still alive while caught %d, moved %.2f cm, grew x%.2f, ' ...
+      '%d colour swaps, reward event at %.2f s (expected %.2f), trial ended early %d\n'], ...
+      mat2str(catches), a(5), maxMove, maxGrowth, flips, tReward, ...
+      pars.caughtDuration / 2, isequal(events.endTrial.Node.CurrValue, trials0 + 1));
+  end
+  for k = 1:3; step(); end
   a = events.bug.Node.CurrValue'; % column -> row
   if c == 1
-    fprintf('Catch 1: catches=%s rewarded=%s reward=%s alive after=%d\n', ...
-      mat2str(catches), mat2str(rewardedFlags), mat2str(rewards), a(5));
-    for k = 1:round(1.5 / dt); step(); end
+    fprintf('        after the animation: alive %d, trial ended %d', a(5), ...
+      isequal(events.endTrial.Node.CurrValue, trials0 + 1));
+    for k = 1:round((pars.respawnDelay + 0.5) / dt); step(); end
     a = events.bug.Node.CurrValue'; % column -> row
-    fprintf('        alive 1.5 s later: %d', a(5));
-    for k = 1:round(1 / dt); step(); end
-    a = events.bug.Node.CurrValue'; % column -> row
-    fprintf(', 2.5 s later: %d\n', a(5));
+    fprintf(', respawned %.1f s later: %d\n', pars.respawnDelay + 0.5, a(5));
   end
 end
 fprintf('%d catches, %d rewarded (p = %g), %d reward outputs totalling %g ul; rewarded events match outputs: %d\n', ...
