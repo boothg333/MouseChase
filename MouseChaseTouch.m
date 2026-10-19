@@ -38,27 +38,18 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %
 %   High-rate data is logged by the task itself and saved at the end of the
 %   session next to the block file, as <expRef>_MouseChase.mat (variable
-<<<<<<< Updated upstream
 %   'mouseChase'), with times on the same clock as the block's events
 %   (except the touch events):
-%     bug          [time x y heading hidden alive threatLevel] every update
-%                  (s, cm, rad, 0-1)
+%     bug          [time x y heading hidden alive threatLevel caught] every
+%                  update (s, cm, rad, 0-1; caught: frozen after a catch)
 %     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
 %                  3 move, 4 end; cm, s in GetSecs, see clockSync)
-%     catchLog     [time x y rewarded] at each catch
+%     catchLog     [time x y rewarded] at each catch (the reward itself
+%                  follows p.caughtDuration / 2 later)
 %     catchContact [id x y w h age] of the contact that made each catch
 %                  (cm, s; a large or old contact is likely the tail)
 %     clockSync    [blockTime GetSecs] every update, to convert the touch
 %                  times to block time
-=======
-%   'mouseChase'), with times on the same clock as the block's events:
-%     bug          [time x y heading hidden alive threatLevel caught] every
-%                  update (s, cm, rad, 0-1; caught: frozen after a catch)
-%     touchEvents  [type id x y w h time] raw touch events (type 2 begin,
-%                  3 move, 4 end; cm, s)
-%     catchLog     [time x y rewarded] at each catch (the reward itself
-%                  follows p.caughtDuration / 2 later)
->>>>>>> Stashed changes
 %     plus the environment, screen geometry and the final parameters.
 
 %% Shared, mutable context (touch queue, screen geometry)
@@ -80,12 +71,8 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
   'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
-<<<<<<< Updated upstream
-  'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize'};
-=======
-  'gaborCycles', 'gaborContrast', 'gaborColour', ...
+  'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize', ...
   'caughtDuration', 'caughtGrowth', 'caughtFlashRate'};
->>>>>>> Stashed changes
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -104,13 +91,9 @@ tick = t.map2(p.updateRate, @(x, rate) floor(x * rate)).skipRepeats();
 tRun = t.at(tick).keepWhen(running);
 seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
-<<<<<<< Updated upstream
-  'catchCount', 0, 'lastCatchRewarded', false, 'lastRewardSize', 0, ...
-  'lastCatchContact', nan(1, 6), 'evading', false, ...
-=======
   'catchCount', 0, 'rewardCount', 0, 'trialCount', 0, 'caught', false, 'caughtAt', -inf, ...
-  'lastCatchRewarded', false, 'lastRewardSize', 0, 'evading', false, ...
->>>>>>> Stashed changes
+  'lastCatchRewarded', false, 'lastRewardSize', 0, ...
+  'lastCatchContact', nan(1, 6), 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
   'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
   'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
@@ -226,17 +209,13 @@ try
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
   p.catchRadius = NaN;       % cm, contact-to-bug-centre distance for a catch
-<<<<<<< Updated upstream
   p.maxCatchContactSize = Inf; % cm, larger contacts (width or height) can't catch: a dragged tail
                              % shows as a large contact, a paw strike as a small one (1.3 rejected
                              % ~40% of tail catches and no paw catches in EB056's videos)
-  p.respawnDelay = 2;        % s the bug stays away after a catch
-=======
   p.caughtDuration = 2;      % s a caught bug stays frozen and flashing (reward half way)
   p.caughtGrowth = 1.5;      % size of the caught bug, relative to its normal size
   p.caughtFlashRate = 3;     % Hz, black-white-black cycles of the caught bug's stripes
   p.respawnDelay = 2;        % s the bug stays away after the caught animation
->>>>>>> Stashed changes
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
   p.gaborCycles = 3;         % grating cycles along the bug's length
@@ -444,8 +423,8 @@ if hitWall
   s.vel = [0 0];
 end
 
-<<<<<<< Updated upstream
-% Catch: any contact on the visible bug (not too large: see maxCatchContactSize)
+% Catch: any contact on the visible bug (not too large: see
+% maxCatchContactSize) starts the caught animation
 onBug = [];
 if ~s.hidden && nC > 0
   onBug = find(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius & ...
@@ -453,10 +432,6 @@ if ~s.hidden && nC > 0
 end
 if ~isempty(onBug)
   s.lastCatchContact = C(onBug,[1:5 8]); % [id x y w h age], logged with the catch
-=======
-% Catch: any contact on the visible bug starts the caught animation
-if ~s.hidden && nC > 0 && any(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius)
->>>>>>> Stashed changes
   s.catchCount = s.catchCount + 1;
   s.lastCatchRewarded = rand() < P.rewardProbability;
   s.lastRewardSize = P.rewardSize;
@@ -490,13 +465,9 @@ end
 % mc, which costs time during the session) and is saved by finishSession.
 
 function logUpdate(ctx, s, P, env)
-<<<<<<< Updated upstream
-appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel]);
+appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel s.caught]);
 % Touch times are in GetSecs, the rest in block time: log both clocks
 appendLog(ctx, 'logClock', [s.t GetSecs]);
-=======
-appendLog(ctx, 'logBug', [s.t s.pos s.heading s.hidden s.alive s.threatLevel s.caught]);
->>>>>>> Stashed changes
 if ~isempty(s.touchEvents); appendLog(ctx, 'logTouch', s.touchEvents); end
 if ~isKey(ctx, 'catchesLogged'); ctx('catchesLogged') = 0; end
 if s.catchCount > ctx('catchesLogged')
