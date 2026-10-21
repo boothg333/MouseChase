@@ -79,8 +79,9 @@ for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 % Derived from expStart rather than directly from p.environment: during
 % parameter inference anything derived from p is p itself, and subscripting
 % it (floor.image etc.) would add bogus parameters.
-env = events.expStart.map2(p.environment.skipRepeats(), ...
-  @(~, id) loadEnvironment(id, envDir));
+% An empty p.environment takes the training stage's (see stageEnvironment)
+envName = p.environment.map2(p.trainingStage, @stageEnvironment).skipRepeats();
+env = events.expStart.map2(envName, @(~, id) loadEnvironment(id, envDir));
 
 %% Game state, advanced p.updateRate times per second after experiment start
 % Every update recomputes the scene and makes Rigbox redraw; updating less
@@ -204,7 +205,8 @@ try
   p.rewardProbability = NaN; % chance that a catch is rewarded (NaN: from the stage)
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
-  p.environment = 'grass';   % name of a MouseChaseEnvironments/<name>.mat ('default': plain grey)
+  p.environment = '';        % name of a MouseChaseEnvironments/<name>.mat ('default': plain grey;
+                             % empty: from the stage, grey at stage 1, grass after)
   p.trainingStage = 1;       % 1 (naive mouse) ... 5 (expert): sets the NaN values below
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
@@ -288,6 +290,17 @@ names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', .
   'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects'};
 row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
+end
+
+function id = stageEnvironment(id, stage)
+%STAGEENVIRONMENT The environment's name: ID if given, otherwise the
+%   training stage's: plain grey at stage 1, grass from stage 2.
+if ~isempty(id); return; end
+if round(stage) <= 1
+  id = 'default';
+else
+  id = 'grass';
+end
 end
 
 function env = stageObjects(env, P)
