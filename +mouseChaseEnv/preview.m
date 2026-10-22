@@ -3,13 +3,13 @@ function fig = preview(env, trainingStages)
 %   MOUSECHASEENV.PREVIEW(ENV) shows the floor, the hiding objects (numbered,
 %   as used by mouseChaseEnv.removeObject), the screen edge, the crevice
 %   the bug can hide in past the edge, and the box over the photodiode
-%   square (out of reach). Bug outlines at training stages 1 and 5 are drawn
+%   square (out of reach). Bug outlines at training stages 1 and 6 are drawn
 %   below the screen edge for scale.
 %   MOUSECHASEENV.PREVIEW(ENV, STAGES) draws bugs for other stages.
 %   Accepts an environment struct or a saved environment's ID.
 
 if ischar(env); env = mouseChaseEnv.load(env); end
-if nargin < 2; trainingStages = [1 5]; end
+if nargin < 2; trainingStages = [1 6]; end
 scr = mouseChaseEnv.screen();
 half = scr.dimsCm / 2;
 
@@ -83,7 +83,7 @@ end
 
 function [len, wid] = bugSize(stage)
 % Bug size per training stage, as in MouseChaseTouch's stageValues
-sizes = [6.0 2.4; 5.25 2.1; 4.5 1.8; 3.9 1.5; 3.6 1.35];
-row = sizes(min(max(round(stage), 1), 5), :);
+sizes = [6.0 2.4; 6.0 2.4; 5.25 2.1; 4.5 1.8; 3.9 1.5; 3.6 1.35];
+row = sizes(min(max(round(stage), 1), size(sizes, 1)), :);
 len = row(1); wid = row(2);
 end

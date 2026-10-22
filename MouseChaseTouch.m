@@ -208,8 +208,8 @@ try
   p.targetCatches = 250;     % stop after this many catches (Inf allowed)
   p.maxDuration = 3600;      % stop after this many seconds (Inf allowed)
   p.environment = '';        % name of a MouseChaseEnvironments/<name>.mat ('default': plain grey;
-                             % empty: from the stage, grey at stage 1, grass after)
-  p.trainingStage = 1;       % 1 (naive mouse) ... 5 (expert): sets the NaN values below
+                             % empty: from the stage, grey at stages 1-2, grass after)
+  p.trainingStage = 1;       % 1 (naive mouse) ... 6 (expert): sets the NaN values below
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
   p.catchRadius = NaN;       % cm, contact-to-bug-centre distance for a catch
@@ -275,15 +275,20 @@ end
 end
 
 function v = stageValues(stage)
-%STAGEVALUES Difficulty ladder: 1 = naive mouse (big bug that barely
-%   flees) ... 5 = expert. Rows are stages.
-%   Stage 1 is "touch the bug, get a reward": slow, big, no fleeing
-%   (visualRange 0). wanderThrust = wander speed (cm/s) x friction (6);
-%   top escape speed = maxEscapeThrust / friction.
+%STAGEVALUES Difficulty ladder: 1 = naive mouse (big bug that doesn't
+%   move) ... 6 = expert. Rows are stages.
+%   Stage 1 is "touch the bug, get a reward": a big static bug (it can't
+%   move: wanderThrust and maxEscapeThrust 0, see isStatic), placed on the
+%   screen, and a large reward. Stage 2 is the same but slow-moving, with
+%   no fleeing (visualRange 0). (Stage 1 was added on 2026-10-22; until
+%   then stages 2-6 were numbered 1-5.)
+%   wanderThrust = wander speed (cm/s) x friction (6); top escape speed =
+%   maxEscapeThrust / friction.
 %   rewardSize in ul; hidingObjects 0 = the environment's objects (rocks
 %   etc.) are left out, 1 = included.
 %            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects
-ladder = [   6.0       2.4      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
+ladder = [   6.0       2.4      3.0          0          15          45                0             0.5           20        0           1.0               20.0       0
+             6.0       2.4      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
              5.25      2.1      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
              4.5       1.8      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
              3.9       1.5      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
@@ -295,11 +300,17 @@ row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
 end
 
+function static = isStatic(P)
+%ISSTATIC True for a bug that can't move (no wander or escape thrust): it
+%   is placed on the screen and stays there, facing one way, until caught.
+static = P.wanderThrust == 0 && P.maxEscapeThrust == 0;
+end
+
 function id = stageEnvironment(id, stage)
 %STAGEENVIRONMENT The environment's name: ID if given, otherwise the
-%   training stage's: plain grey at stage 1, grass from stage 2.
+%   training stage's: plain grey at stages 1-2, grass from stage 3.
 if ~isempty(id); return; end
-if round(stage) <= 1
+if round(stage) <= 2
   id = 'default';
 else
   id = 'grass';
@@ -338,7 +349,7 @@ if ~s.alive
   s.evading = false;
   s.threatLevel = 0;
   if tNow >= s.respawnAt
-    s = spawnBug(s, g, P);
+    s = spawnBug(s, g, P, env.objects);
   end
   return
 end
@@ -346,6 +357,10 @@ end
 half = g.dimsCm / 2;
 onScreen = all(abs(s.pos) <= half);
 s.hidden = ~onScreen || isUnderObject(s.pos, env.objects);
+if isStatic(P) % stays where spawnBug placed it, waiting to be caught
+  s = checkCatch(s, tNow, P);
+  return
+end
 
 % Threat level (0-1) of each contact: how fast it moves towards the bug
 % (graded between threatSpeed and fullThreatSpeed; sideways movement counts
@@ -443,8 +458,14 @@ if hitWall
   s.vel = [0 0];
 end
 
-% Catch: any contact on the visible bug (not too large: see
-% maxCatchContactSize) starts the caught animation
+s = checkCatch(s, tNow, P);
+end
+
+function s = checkCatch(s, tNow, P)
+%CHECKCATCH Any contact on the visible bug (not too large: see
+%   maxCatchContactSize) starts the caught animation.
+C = s.contacts;
+nC = size(C, 1);
 onBug = [];
 if ~s.hidden && nC > 0
   onBug = find(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius & ...
@@ -580,17 +601,23 @@ for d = reshape(cellstr(dirs), 1, [])
 end
 end
 
-function s = spawnBug(s, g, P)
+function s = spawnBug(s, g, P, objects)
 %SPAWNBUG Place the bug in the crevice beyond a random screen edge, facing
-%   in, where it comes onto the screen at least P.spawnClearance cm from
-%   the mouse's contacts (seen in the last 2 s), so it isn't caught as soon
-%   as it appears. If no such place turns up, the farthest one tried.
+%   in (a static bug: anywhere on the screen, facing any way), where it
+%   comes onto the screen at least P.spawnClearance cm from the mouse's
+%   contacts (seen in the last 2 s), so it isn't caught as soon as it
+%   appears. If no such place turns up, the farthest one tried.
 mouseXY = s.mouseXY;
 if s.t - s.mouseSeenAt > 2; mouseXY = zeros(0, 2); end
 half = g.dimsCm / 2;
+static = isStatic(P);
 best = -inf;
 for k = 1:50
-  pos = randomSpawnPoint(g, P);
+  if static
+    pos = randomScreenPoint(g, P, objects);
+  else
+    pos = randomSpawnPoint(g, P);
+  end
   entry = min(max(pos, -half), half); % where it comes onto the screen
   d = min([inf; hypot(mouseXY(:,1) - entry(1), mouseXY(:,2) - entry(2))]);
   if d > best
@@ -599,7 +626,11 @@ for k = 1:50
   end
   if d >= P.spawnClearance; break; end
 end
-s.heading = atan2(-s.pos(2), -s.pos(1)) + (rand() - 0.5);
+if static
+  s.heading = 2 * pi * rand();
+else
+  s.heading = atan2(-s.pos(2), -s.pos(1)) + (rand() - 0.5);
+end
 s.wanderAngle = s.heading;
 s.vel = [0 0];
 s.alive = true;
@@ -609,6 +640,21 @@ s.threatLevel = 0;
 s.escapeTime = 0;
 s.restUntil = -inf;
 s.hideTime = 0;
+end
+
+function pos = randomScreenPoint(g, P, objects)
+%RANDOMSCREENPOINT A random place on the screen for a static bug: wholly
+%   on the screen, clear of blocked areas and not under a hiding object.
+margin = P.bugLength / 2 + 1; % cm from the screen edge
+range = g.dimsCm / 2 - margin;
+for k = 1:100
+  pos = (2 * rand(1, 2) - 1) .* range;
+  ok = ~isUnderObject(pos, objects);
+  for b = 1:size(g.blockedCm, 1)
+    ok = ok && ~isInsideRect(pos, g.blockedCm(b,:), P.bugLength);
+  end
+  if ok; return; end
+end
 end
 
 function pos = randomSpawnPoint(g, P)
