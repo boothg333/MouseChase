@@ -10,7 +10,8 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   times a second (as full cycles). Half way through, a reward of
 %   p.rewardSize ul is delivered with probability p.rewardProbability; at
 %   the end the bug disappears, the trial ends, and the bug respawns from
-%   the screen edge after p.respawnDelay seconds.
+%   the screen edge after p.respawnDelay seconds, at least
+%   p.spawnClearance cm from the mouse's contacts.
 %
 %   One trial = one catch, and the game reads the current trial's
 %   parameters, so trial types (e.g. bug difficulty) can be made with
@@ -72,7 +73,7 @@ gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bu
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
   'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
   'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize', ...
-  'caughtDuration', 'caughtGrowth', 'caughtFlashRate'};
+  'caughtDuration', 'caughtGrowth', 'caughtFlashRate', 'spawnClearance'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -97,7 +98,8 @@ seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'lastCatchContact', nan(1, 6), 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
   'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
-  'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7));
+  'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7), ...
+  'mouseXY', zeros(0, 2), 'mouseSeenAt', -inf);
 state = tRun.scan(@(s, tNow, P, e, ref) updateGame(s, tNow, P, e, ref, ctx), seed, ...
   'pars', p, env, events.expStart).subscriptable();
 
@@ -218,6 +220,7 @@ try
   p.caughtGrowth = 1.5;      % size of the caught bug, relative to its normal size
   p.caughtFlashRate = 3;     % Hz, black-white-black cycles of the caught bug's stripes
   p.respawnDelay = 2;        % s the bug stays away after the caught animation
+  p.spawnClearance = 12;     % cm, the bug comes onto the screen at least this far from the mouse's contacts
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
   p.gaborCycles = 3;         % grating cycles along the bug's length
@@ -321,6 +324,10 @@ end
 dt = min(max(tNow - s.t, 0), 0.1); % cap to avoid jumps after a stall
 s.t = tNow;
 [s.contacts, s.touchEvents] = pollTouches(ctx);
+if ~isempty(s.contacts) % where the mouse was last seen, for spawnBug
+  s.mouseXY = s.contacts(:,2:3);
+  s.mouseSeenAt = tNow;
+end
 s.stop = s.trialCount >= P.targetCatches || tNow - s.tStart >= P.maxDuration;
 
 if s.caught
@@ -574,21 +581,23 @@ end
 end
 
 function s = spawnBug(s, g, P)
-%SPAWNBUG Place the bug in the crevice beyond a random screen edge, facing in.
+%SPAWNBUG Place the bug in the crevice beyond a random screen edge, facing
+%   in, where it comes onto the screen at least P.spawnClearance cm from
+%   the mouse's contacts (seen in the last 2 s), so it isn't caught as soon
+%   as it appears. If no such place turns up, the farthest one tried.
+mouseXY = s.mouseXY;
+if s.t - s.mouseSeenAt > 2; mouseXY = zeros(0, 2); end
 half = g.dimsCm / 2;
-depth = P.creviceDepth / 2;
-side = randi(4);
-along = (rand() - 0.5) * 1.6; % keep away from the corners
-switch side
-  case 1, s.pos = [-half(1) - depth, along * half(2)];
-  case 2, s.pos = [half(1) + depth, along * half(2)];
-  case 3, s.pos = [along * half(1), -half(2) - depth];
-  case 4, s.pos = [along * half(1), half(2) + depth];
-end
-for b = 1:size(g.blockedCm, 1) % never start next to a blocked area
-  if isInsideRect(s.pos, g.blockedCm(b,:), P.creviceDepth + P.bugLength)
-    s.pos = -s.pos;
+best = -inf;
+for k = 1:50
+  pos = randomSpawnPoint(g, P);
+  entry = min(max(pos, -half), half); % where it comes onto the screen
+  d = min([inf; hypot(mouseXY(:,1) - entry(1), mouseXY(:,2) - entry(2))]);
+  if d > best
+    best = d;
+    s.pos = pos;
   end
+  if d >= P.spawnClearance; break; end
 end
 s.heading = atan2(-s.pos(2), -s.pos(1)) + (rand() - 0.5);
 s.wanderAngle = s.heading;
@@ -600,6 +609,24 @@ s.threatLevel = 0;
 s.escapeTime = 0;
 s.restUntil = -inf;
 s.hideTime = 0;
+end
+
+function pos = randomSpawnPoint(g, P)
+%RANDOMSPAWNPOINT A random place in the crevice beyond a screen edge.
+half = g.dimsCm / 2;
+depth = P.creviceDepth / 2;
+along = (rand() - 0.5) * 1.6; % keep away from the corners
+switch randi(4)
+  case 1, pos = [-half(1) - depth, along * half(2)];
+  case 2, pos = [half(1) + depth, along * half(2)];
+  case 3, pos = [along * half(1), -half(2) - depth];
+  case 4, pos = [along * half(1), half(2) + depth];
+end
+for b = 1:size(g.blockedCm, 1) % never start next to a blocked area
+  if isInsideRect(pos, g.blockedCm(b,:), P.creviceDepth + P.bugLength)
+    pos = -pos;
+  end
+end
 end
 
 function visible = canSee(from, to, objects, blockedCm, skip)

@@ -19,7 +19,7 @@ setenv('MOUSECHASE_LOG_DIR', [logDir pathsep logDir2]);
 
 pars = exp.inferParameters(defFile);
 pars = rmfield(pars, {'numRepeats', 'defFunction', 'type'});
-pars.targetCatches = 3; % keep it quick
+pars.targetCatches = 6; % keep it quick (5 respawns checked)
 pars.trainingStage = stage;
 pars.rewardProbability = 0.5; % overrides the stage's value
 pars.wanderThrust = 24; % explicit, for the trial-parameter check below
@@ -110,6 +110,7 @@ fprintf('Trial params: wanderThrust %g -> %g, median wander speed now %.1f cm/s\
 
 %% 4. A still touch landing on the visible bug catches it: it freezes,
 % grows and flashes for caughtDuration, with the reward half way through
+paw = [-17 0]; spawnDist = [];
 for c = 1:pars.targetCatches
   waitVisible();
   b = events.bug.Node.CurrValue'; % column -> row
@@ -144,13 +145,25 @@ for c = 1:pars.targetCatches
   for k = 1:3; step(); end
   a = events.bug.Node.CurrValue'; % column -> row
   if c == 1
-    fprintf('        after the animation: alive %d, trial ended %d', a(5), ...
+    fprintf('        after the animation: alive %d, trial ended %d\n', a(5), ...
       isequal(events.endTrial.Node.CurrValue, trials0 + 1));
-    for k = 1:round((pars.respawnDelay + 0.5) / dt); step(); end
-    a = events.bug.Node.CurrValue'; % column -> row
-    fprintf(', respawned %.1f s later: %d\n', pars.respawnDelay + 0.5, a(5));
+  end
+  if ~stopped % (after the last catch the session stops and ignores touches)
+    % A paw held just inside the left edge while the bug respawns: the bug
+    % must come onto the screen at least spawnClearance away from it
+    for k = 1:round((pars.respawnDelay + 0.5) / dt)
+      touch(3, 40, paw);
+      step();
+      a = events.bug.Node.CurrValue'; % column -> row
+      if a(5); break; end
+    end
+    touch(4, 40, paw);
+    entry = min(max(a(1:2), -dims / 2), dims / 2);
+    spawnDist(end+1) = hypot(entry(1) - paw(1), entry(2) - paw(2)); %#ok<AGROW>
   end
 end
+fprintf('Respawns with a paw at %s: entry distances %s cm (clearance %g)\n', ...
+  mat2str(paw), mat2str(spawnDist, 3), pars.spawnClearance);
 fprintf('%d catches, %d rewarded (p = %g), %d reward outputs totalling %g ul; rewarded events match outputs: %d\n', ...
   numel(catches), sum(rewardedFlags), pars.rewardProbability, numel(rewards), sum(rewards), ...
   sum(rewardedFlags) == numel(rewards) && numel(rewardedFlags) == numel(catches));
