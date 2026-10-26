@@ -68,7 +68,7 @@ toPx = @(xy) [xy(1) / cpp(1) + W(1) / 2, W(2) / 2 - xy(2) / cpp(2)];
 dt = 1/60;
 
 %% 1. Wander for 20 s without touches
-B = zeros(0, 5);
+B = zeros(0, 6);
 for k = 1:round(20 / dt)
   step();
   B(end+1,:) = events.bug.Node.CurrValue'; % column -> row %#ok<AGROW>
@@ -97,11 +97,73 @@ touch(4, 7, start - [9 0]);
 step();
 fprintf('Threat: evading seen %d, bug speed rose to %.1f cm/s\n', evading, max(spd));
 
+%% 2b. Stage 1: catches within catchMargin of the bug's outline; the bug
+% doesn't drift into a still paw (keepOut), and a paw moving towards it
+% catches it from further away (snoutReach). Distances are from the outline.
+if stage == 1
+  M = 2; reach = M + 3; % stage 1's catchMargin and catchMargin + snoutReach
+  bugLW = [12 4.8]; % stage 1's bug
+  % A paw landing beside the bug, 1.5 cm out from its side: caught
+  waitVisible();
+  b = events.bug.Node.CurrValue'; % column -> row
+  sideXY = b(1:2) + (bugLW(2) / 2 + 1.5) * [-sin(b(3)) cos(b(3))];
+  nCatch0 = numel(catches);
+  touch(2, 51, sideXY); step(); touch(4, 51, sideXY); step();
+  fprintf('Outline: paw landing %.1f cm from the bug''s side (margin %g): caught %d\n', ...
+    outlineDist(sideXY, b, bugLW), M, numel(catches) > nCatch0);
+  for k = 1:round((pars.caughtDuration + 0.5) / dt); step(); end
+  % A still paw in its path, just out of reach
+  waitVisible();
+  b = events.bug.Node.CurrValue'; % column -> row
+  hd = [cos(b(3)) sin(b(3))];
+  pawXY = b(1:2) + (bugLW(1) / 2 + M + pars.keepOutMargin + 0.5) * hd;
+  nCatch0 = numel(catches); minD = inf;
+  touch(2, 50, pawXY);
+  for k = 1:round(10 / dt)
+    touch(3, 50, pawXY);
+    step();
+    v = events.bug.Node.CurrValue'; % column -> row
+    minD = min(minD, outlineDist(pawXY, v, bugLW));
+  end
+  fprintf('KeepOut: still paw placed %.1f cm ahead for 10 s: closest %.2f cm (keeps >= %g), caught %d\n', ...
+    M + pars.keepOutMargin + 0.5, minD, M + pars.keepOutMargin, numel(catches) > nCatch0);
+  % Sideways past the bug at 10 cm/s, within snout reach: no catch
+  b = events.bug.Node.CurrValue'; % column -> row
+  toPaw = (pawXY - b(1:2)) / norm(pawXY - b(1:2));
+  side = [-toPaw(2) toPaw(1)];
+  for k = 1:12
+    pawXY = pawXY + side * 10 * dt;
+    touch(3, 50, pawXY);
+    step();
+  end
+  v = events.bug.Node.CurrValue'; % column -> row
+  fprintf('         paw moving sideways at %.1f cm: caught %d\n', ...
+    outlineDist(pawXY, v, bugLW), numel(catches) > nCatch0);
+  % Towards the bug at 10 cm/s: caught before the paw is within catchMargin
+  dCatch = NaN;
+  for k = 1:60
+    v = events.bug.Node.CurrValue'; % column -> row
+    toBug = (v(1:2) - pawXY) / norm(v(1:2) - pawXY);
+    pawXY = pawXY + toBug * 10 * dt;
+    touch(3, 50, pawXY);
+    step();
+    if numel(catches) > nCatch0
+      v = events.bug.Node.CurrValue'; % where it was caught (it may have turned)
+      dCatch = outlineDist(pawXY, v, bugLW);
+      break
+    end
+  end
+  touch(4, 50, pawXY);
+  fprintf('         paw moving towards the bug: caught at %.2f cm (catchMargin %g, with snout %g)\n', ...
+    dCatch, M, reach);
+  for k = 1:round((pars.caughtDuration + 0.5) / dt); step(); end
+end
+
 %% 3. New trial parameters (as with conditional params) change the bug
 fast = pars;
 fast.wanderThrust = 2 * pars.wanderThrust;
 post(p, fast);
-B = zeros(0, 5);
+B = zeros(0, 6);
 for k = 1:round(10 / dt)
   step();
   B(end+1,:) = events.bug.Node.CurrValue'; % column -> row %#ok<AGROW>
@@ -228,10 +290,25 @@ delete(fakeCleanup); % callbacks keep this workspace alive, so clean up explicit
   function waitVisible()
     for kk = 1:round(60 / dt)
       v = events.bug.Node.CurrValue'; % column -> row
-      if ~v(4) && v(5) && all(abs(v(1:2)) < dims / 2 - 3); return; end
+      if ~v(4) && v(5) && ~v(6) && all(abs(v(1:2)) < dims / 2 - 3); return; end
       step();
     end
     error('bug never became visible');
+  end
+  function od = outlineDist(xy, bug, lw)
+    % Distance from xy to the outline of a bug [x y heading ...] of size
+    % lw ([length width]), 0 on the bug (densely sampled outline). (Names
+    % prefixed with o: nested functions share the variables above.)
+    oT = linspace(0, 2 * pi, 2000)';
+    oC = cos(bug(3)); oS = sin(bug(3));
+    oP = [lw(1) / 2 * cos(oT), lw(2) / 2 * sin(oT)];
+    oP = bug(1:2) + [oP(:,1) * oC - oP(:,2) * oS, oP(:,1) * oS + oP(:,2) * oC];
+    oR = xy - bug(1:2);
+    oU = oR(1) * oC + oR(2) * oS; oW = -oR(1) * oS + oR(2) * oC;
+    od = 0;
+    if (oU / (lw(1) / 2))^2 + (oW / (lw(2) / 2))^2 > 1
+      od = min(hypot(oP(:,1) - xy(1), oP(:,2) - xy(2)));
+    end
   end
   function addReward(v); rewards(end+1) = v; end
   function addCatch(v); catches(end+1) = v; end

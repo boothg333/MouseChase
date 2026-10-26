@@ -53,9 +53,11 @@ for b = 1:size(scr.blockedCm, 1)
 end
 
 % Bugs for scale, below the screen edge
+left = -half(1) + 1; % left end of the next bug
 for i = 1:numel(trainingStages)
   [len, wid] = bugSize(trainingStages(i));
-  c = [-half(1) + 3 + 12 * (i - 1), -half(2) - 2.2];
+  c = [left + len / 2, -half(2) - 2.2];
+  left = left + len + 8; % room for the label
   [x, y] = outline('ellipse', c, [len wid], 0);
   patch(ax, x, y, 'k');
   text(ax, c(1) + len / 2 + 0.5, c(2), sprintf('bug, stage %d', trainingStages(i)), 'FontSize', 8);
@@ -83,7 +85,7 @@ end
 
 function [len, wid] = bugSize(stage)
 % Bug size per training stage, as in MouseChaseTouch's stageValues
-sizes = [6.0 2.4; 6.0 2.4; 5.25 2.1; 4.5 1.8; 3.9 1.5; 3.6 1.35];
+sizes = [12.0 4.8; 6.0 2.4; 5.25 2.1; 4.5 1.8; 3.9 1.5; 3.6 1.35];
 row = sizes(min(max(round(stage), 1), size(sizes, 1)), :);
 len = row(1); wid = row(2);
 end

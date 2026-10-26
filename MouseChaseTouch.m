@@ -4,8 +4,8 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %   from moving touches. Touches come from the multi-touch overlay (paws,
 %   tail), read by tools/touchReader.ps1 in the background (Windows raw
 %   input, no Psychtoolbox touch support needed).
-%   When any contact lands within p.catchRadius of the visible bug, it is
-%   caught: for p.caughtDuration seconds it freezes, grows to p.caughtGrowth
+%   When any contact lands on the visible bug, or within p.catchMargin cm
+%   of its outline, it is caught: for p.caughtDuration seconds it freezes, grows to p.caughtGrowth
 %   times its size and its stripes swap black and white p.caughtFlashRate
 %   times a second (as full cycles). Half way through, a reward of
 %   p.rewardSize ul is delivered with probability p.rewardProbability; at
@@ -47,8 +47,9 @@ function MouseChaseTouch(t, events, p, visStim, inputs, outputs, ~) %#ok<INUSL>
 %                  3 move, 4 end; cm, s in GetSecs, see clockSync)
 %     catchLog     [time x y rewarded] at each catch (the reward itself
 %                  follows p.caughtDuration / 2 later)
-%     catchContact [id x y w h age] of the contact that made each catch
-%                  (cm, s; a large or old contact is likely the tail)
+%     catchContact [id x y w h age snout] of the contact that made each
+%                  catch (cm, s; a large or old contact is likely the tail;
+%                  snout 1: caught from beyond catchMargin, see snoutReach)
 %     clockSync    [blockTime GetSecs] every update, to convert the touch
 %                  times to block time
 %     plus the environment, screen geometry and the final parameters.
@@ -66,14 +67,15 @@ ctx('readerScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'touch
 %% Parameters
 % The game functions receive the whole parameter struct, but mc only lists
 % parameters that are referenced as p.<name> here, so reference them all.
-gamePars = {'rewardProbability', 'catchRadius', 'respawnDelay', 'bugLength', 'bugWidth', ...
+gamePars = {'rewardProbability', 'catchMargin', 'respawnDelay', 'bugLength', 'bugWidth', ...
   'visualRange', 'threatSpeed', 'fullThreatSpeed', 'landingThreatTime', 'lineOfSight', ...
   'obstacleRange', 'maxEscapeThrust', 'maxEscapeTime', 'escapeRest', 'easeTime', ...
   'wanderThrust', 'wanderNoise', 'friction', 'maxTurnRate', 'creviceDepth', ...
   'maxHideTime', 'showTouches', 'startDelay', 'trainingStage', ...
   'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
   'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize', ...
-  'caughtDuration', 'caughtGrowth', 'caughtFlashRate', 'spawnClearance'};
+  'caughtDuration', 'caughtGrowth', 'caughtFlashRate', 'spawnClearance', ...
+  'spawnOnScreen', 'keepOut', 'keepOutMargin', 'snoutReach', 'snoutSpeed'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -95,7 +97,7 @@ seed = struct('t', [], 'pos', [0 0], 'vel', [0 0], 'heading', 0, ...
   'wanderAngle', 0, 'hidden', true, 'alive', false, 'respawnAt', -inf, ...
   'catchCount', 0, 'rewardCount', 0, 'trialCount', 0, 'caught', false, 'caughtAt', -inf, ...
   'lastCatchRewarded', false, 'lastRewardSize', 0, ...
-  'lastCatchContact', nan(1, 6), 'evading', false, ...
+  'lastCatchContact', nan(1, 7), 'evading', false, ...
   'spawnTime', 0, 'threatLevel', 0, 'escapeTime', 0, 'restUntil', -inf, ...
   'hideTime', 0, 'tStart', 0, 'stop', false, 'safetySave', [], ...
   'contacts', zeros(0, 8), 'touchEvents', zeros(0, 7), ...
@@ -132,7 +134,7 @@ events.sessionSaved = events.expStop.map2(events.expStart, @(~, ref) finishSessi
 events.evading = state.evading.skipRepeats();
 events.environment = env.map(@(e) e.id);
 if ~isempty(getenv('MOUSECHASE_DEBUG_EVENTS')) % tools/simulation only
-  events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive]');
+  events.bug = state.map(@(s) [s.pos s.heading s.hidden s.alive s.caught]');
 end
 
 %% Visual stimuli
@@ -212,7 +214,7 @@ try
   p.trainingStage = 1;       % 1 (naive mouse) ... 6 (expert): sets the NaN values below
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
-  p.catchRadius = NaN;       % cm, contact-to-bug-centre distance for a catch
+  p.catchMargin = NaN;       % cm beyond the bug's outline that a contact still catches it (>= 0)
   p.maxCatchContactSize = Inf; % cm, larger contacts (width or height) can't catch: a dragged tail
                              % shows as a large contact, a paw strike as a small one (1.3 rejected
                              % ~40% of tail catches and no paw catches in EB056's videos)
@@ -221,6 +223,11 @@ try
   p.caughtFlashRate = 3;     % Hz, black-white-black cycles of the caught bug's stripes
   p.respawnDelay = 2;        % s the bug stays away after the caught animation
   p.spawnClearance = 12;     % cm, the bug comes onto the screen at least this far from the mouse's contacts
+  p.spawnOnScreen = NaN;     % 1: the bug appears on the screen, 0: it comes in from beyond the edge
+  p.keepOut = NaN;           % 1: the bug never moves itself to within catchMargin + keepOutMargin of a contact
+  p.keepOutMargin = 1;       % cm (see keepOut)
+  p.snoutReach = NaN;        % cm of extra catch radius for a contact moving towards the bug...
+  p.snoutSpeed = 5;          % cm/s ...at this speed or more (the snout reaches ahead of the paws)
   p.bugLength = NaN;         % cm
   p.bugWidth = NaN;          % cm
   p.gaborCycles = 3;         % grating cycles along the bug's length
@@ -275,27 +282,40 @@ end
 end
 
 function v = stageValues(stage)
-%STAGEVALUES Difficulty ladder: 1 = naive mouse (big bug that doesn't
-%   move) ... 6 = expert. Rows are stages.
-%   Stage 1 is "touch the bug, get a reward": a big static bug (it can't
-%   move: wanderThrust and maxEscapeThrust 0, see isStatic), placed on the
-%   screen, and a large reward. Stage 2 is the same but slow-moving, with
-%   no fleeing (visualRange 0). (Stage 1 was added on 2026-10-22; until
-%   then stages 2-6 were numbered 1-5.)
+%STAGEVALUES Difficulty ladder: 1 = naive mouse (huge bug that drifts
+%   slowly and never comes to the mouse) ... 6 = expert. Rows are stages.
+%   Stage 1 is "touch the bug, get a reward": a huge bug (twice stage 2's
+%   size) that appears on the screen, drifts at half
+%   stage 2's speed without fleeing, keeps out of reach of contacts by
+%   itself (keepOut) and can be caught from further away by a contact
+%   moving towards it (snoutReach), and a large reward. Stage 2 is a big,
+%   slow bug that doesn't flee (visualRange 0). (Stage 1 was added on
+%   2026-10-22; until then stages 2-6 were numbered 1-5.)
 %   wanderThrust = wander speed (cm/s) x friction (6); top escape speed =
 %   maxEscapeThrust / friction.
 %   rewardSize in ul; hidingObjects 0 = the environment's objects (rocks
 %   etc.) are left out, 1 = included.
-%            bugLength bugWidth catchRadius visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects
-ladder = [   6.0       2.4      3.0          0          15          45                0             0.5           20        0           1.0               20.0       0
-             6.0       2.4      3.0          0          15          45               12             0.5           20       12           1.0               15.0       0
-             5.25      2.1      2.5          6          15          45               60             0.5           20       18           1.0               12.5       0
-             4.5       1.8      2.0         10          10          35              108             0.8           40       24           1.0               10.0       1
-             3.9       1.5      1.7         14           7          28              162             1.0           60       24           0.9                7.5       1
-             3.6       1.35     1.5         18           5          22              210             1.3           90       30           0.8                5.0       1];
-names = {'bugLength', 'bugWidth', 'catchRadius', 'visualRange', 'threatSpeed', ...
+%   spawnOnScreen 1 = the bug appears on the screen, 0 = it comes in from
+%   beyond the screen edge.
+%   catchMargin cm = how far beyond the bug's outline a contact still
+%   catches it (a contact on the bug always does). From stage 2 the
+%   margins give about the same catch area as the circles around the
+%   bug's centre used before 2026-10-23 (catchRadius 3, 2.5, 2, 1.7, 1.5).
+%   keepOut 1 = the bug never moves itself to within catchMargin +
+%   p.keepOutMargin of a contact (so a still paw can't catch it), 0 = off.
+%   snoutReach cm = extra catch margin for a contact moving towards the
+%   bug at p.snoutSpeed or more (the snout reaches ahead of the paws).
+%            bugLength bugWidth catchMargin visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects spawnOnScreen keepOut snoutReach
+ladder = [  12.0       4.8      2.0          0          15          45                0             0.5           20        6           1.0               20.0       0             1             1       3
+             6.0       2.4      1.0          0          15          45               12             0.5           20       12           1.0               15.0       0             0             0       0
+             5.25      2.1      0.8          6          15          45               60             0.5           20       18           1.0               12.5       0             0             0       0
+             4.5       1.8      0.55        10          10          35              108             0.8           40       24           1.0               10.0       1             0             0       0
+             3.9       1.5      0.45        14           7          28              162             1.0           60       24           0.9                7.5       1             0             0       0
+             3.6       1.35     0.35        18           5          22              210             1.3           90       30           0.8                5.0       1             0             0       0];
+names = {'bugLength', 'bugWidth', 'catchMargin', 'visualRange', 'threatSpeed', ...
   'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
-  'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects'};
+  'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects', ...
+  'spawnOnScreen', 'keepOut', 'snoutReach'};
 row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
 end
@@ -303,6 +323,7 @@ end
 function static = isStatic(P)
 %ISSTATIC True for a bug that can't move (no wander or escape thrust): it
 %   is placed on the screen and stays there, facing one way, until caught.
+%   (No stage uses this now; it's for setting both thrusts to 0 in mc.)
 static = P.wanderThrust == 0 && P.maxEscapeThrust == 0;
 end
 
@@ -386,7 +407,13 @@ if nC > 0
       end
     end
   end
-  isObstacle = level == 0 & d < P.obstacleRange & d > 0;
+  % Contacts to steer around: still paws close by, and with keepOut, any
+  % contact the bug is about to drift into reach of (see below)
+  avoidRange = P.obstacleRange;
+  if P.keepOut % (d is from the bug's centre)
+    avoidRange = max(avoidRange, P.bugLength / 2 + P.catchMargin + P.keepOutMargin + 1);
+  end
+  isObstacle = level == 0 & d < avoidRange & d > 0;
 end
 % The reaction fades over the trial (easeTime), and a tired bug ignores
 % threats for a while (escapeRest); hidden, it doesn't react at all
@@ -433,6 +460,7 @@ end
 % Non-holonomic motion: turn at a limited rate, thrust along the heading,
 % no sideways skidding
 deltaAngle = mod(desiredHeading - s.heading + pi, 2 * pi) - pi;
+prevHeading = s.heading;
 s.heading = s.heading + sign(deltaAngle) * min(abs(deltaAngle), P.maxTurnRate * dt);
 headingVec = [cos(s.heading), sin(s.heading)];
 vel = s.vel + headingVec * thrust * dt - P.friction * s.vel * dt;
@@ -453,6 +481,19 @@ for b = 1:size(g.blockedCm, 1)
     hitWall = true;
   end
 end
+% keepOut: the bug never moves or turns itself closer to a contact within
+% reach (catchMargin + keepOutMargin from its outline), so it can't be
+% caught by a paw that holds still; the mouse has to move to it. (It
+% doesn't flee either: a contact moving towards it can still catch it.)
+if P.keepOut && nC > 0
+  dNew = outlineDistance(C(:,2:3), s.pos, s.heading, P.bugLength, P.bugWidth);
+  dOld = outlineDistance(C(:,2:3), prevPos, prevHeading, P.bugLength, P.bugWidth);
+  if any(dNew < P.catchMargin + P.keepOutMargin & dNew < dOld)
+    s.pos = prevPos;
+    s.heading = prevHeading;
+    s.vel = [0 0];
+  end
+end
 if hitWall
   s.wanderAngle = atan2(-s.pos(2), -s.pos(1)); % head back to the centre
   s.vel = [0 0];
@@ -462,17 +503,31 @@ s = checkCatch(s, tNow, P);
 end
 
 function s = checkCatch(s, tNow, P)
-%CHECKCATCH Any contact on the visible bug (not too large: see
-%   maxCatchContactSize) starts the caught animation.
+%CHECKCATCH Any contact on the visible bug or within P.catchMargin of its
+%   outline (and not too large: see maxCatchContactSize) starts the caught
+%   animation. A contact moving towards the bug at P.snoutSpeed or more
+%   catches it from P.snoutReach further away: the mouse's snout, ahead of
+%   its paws, gets there first.
 C = s.contacts;
 nC = size(C, 1);
 onBug = [];
 if ~s.hidden && nC > 0
-  onBug = find(hypot(C(:,2) - s.pos(1), C(:,3) - s.pos(2)) <= P.catchRadius & ...
-    max(C(:,4:5), [], 2) <= P.maxCatchContactSize, 1);
+  d = outlineDistance(C(:,2:3), s.pos, s.heading, P.bugLength, P.bugWidth);
+  rel = [s.pos(1) - C(:,2), s.pos(2) - C(:,3)];
+  toBug = rel ./ max(hypot(rel(:,1), rel(:,2)), eps);
+  closing = sum(C(:,6:7) .* toBug, 2); % speed towards the bug
+  snout = P.snoutReach > 0 & closing >= P.snoutSpeed;
+  reach = P.catchMargin + snout * P.snoutReach;
+  ok = max(C(:,4:5), [], 2) <= P.maxCatchContactSize;
+  onBug = find(d <= P.catchMargin & ok, 1); % a contact on or by the bug first...
+  if isempty(onBug)
+    onBug = find(d <= reach & ok, 1); % ...otherwise a snout catch
+  end
 end
 if ~isempty(onBug)
-  s.lastCatchContact = C(onBug,[1:5 8]); % [id x y w h age], logged with the catch
+  % [id x y w h age snout], logged with the catch (snout: caught only
+  % thanks to snoutReach)
+  s.lastCatchContact = [C(onBug,[1:5 8]), d(onBug) > P.catchMargin];
   s.catchCount = s.catchCount + 1;
   s.lastCatchRewarded = rand() < P.rewardProbability;
   s.lastRewardSize = P.rewardSize;
@@ -482,6 +537,31 @@ if ~isempty(onBug)
   s.evading = false;
   s.threatLevel = 0;
 end
+end
+
+function d = outlineDistance(xy, pos, heading, len, wid)
+%OUTLINEDISTANCE Distance (cm) from each point XY (N x 2) to the outline of
+%   a bug (an ellipse LEN x WID, centred at POS, long axis along HEADING in
+%   rad); 0 for points on the bug. POS and HEADING may also have one row
+%   per point. The outline is a polygon of 128 points (error < 0.02 cm).
+%   (mouseChaseMetrics has a copy: Rigbox takes this folder off the path
+%   during the session, so the task can't share a file with it.)
+a = len / 2;
+b = wid / 2;
+rel = xy - pos;
+u = abs(rel(:,1) .* cos(heading) + rel(:,2) .* sin(heading)); % along the body
+v = abs(-rel(:,1) .* sin(heading) + rel(:,2) .* cos(heading)); % across it
+d = zeros(size(xy, 1), 1);
+out = (u / a) .^ 2 + (v / b) .^ 2 > 1;
+if ~any(out); return; end
+% By symmetry, the distance to one quarter of the outline will do
+t = linspace(0, pi / 2, 33);
+qx = a * cos(t); qy = b * sin(t);
+ax = qx(1:end-1); ay = qy(1:end-1); % segment starts (1 x 32)
+dx = diff(qx); dy = diff(qy);
+wx = u(out) - ax; wy = v(out) - ay;
+f = min(max((wx .* dx + wy .* dy) ./ (dx .^ 2 + dy .^ 2), 0), 1);
+d(out) = sqrt(min((wx - f .* dx) .^ 2 + (wy - f .* dy) .^ 2, [], 2));
 end
 
 function s = stepCaught(s, tNow, P)
@@ -565,8 +645,8 @@ mouseChase = struct('expRef', ref, 'savedAt', datestr(now, 31), ...
   'touchEventColumns', {{'type', 'id', 'x', 'y', 'w', 'h', 'time'}}, ...
   'catchLog', getLog(ctx, 'logCatch', 4), ...
   'catchColumns', {{'time', 'x', 'y', 'rewarded'}}, ...
-  'catchContact', getLog(ctx, 'logCatchContact', 6), ...
-  'catchContactColumns', {{'id', 'x', 'y', 'w', 'h', 'age'}}, ...
+  'catchContact', getLog(ctx, 'logCatchContact', 7), ...
+  'catchContactColumns', {{'id', 'x', 'y', 'w', 'h', 'age', 'snout'}}, ...
   'clockSync', getLog(ctx, 'logClock', 2), ...
   'clockSyncColumns', {{'blockTime', 'GetSecs'}}, ...
   'environment', [], 'params', [], 'geometry', geometry(ctx));
@@ -603,17 +683,18 @@ end
 
 function s = spawnBug(s, g, P, objects)
 %SPAWNBUG Place the bug in the crevice beyond a random screen edge, facing
-%   in (a static bug: anywhere on the screen, facing any way), where it
-%   comes onto the screen at least P.spawnClearance cm from the mouse's
-%   contacts (seen in the last 2 s), so it isn't caught as soon as it
-%   appears. If no such place turns up, the farthest one tried.
+%   in (with P.spawnOnScreen, or a static bug: anywhere on the screen,
+%   facing any way), where it comes onto the screen at least
+%   P.spawnClearance cm from the mouse's contacts (seen in the last 2 s),
+%   so it isn't caught as soon as it appears. If no such place turns up,
+%   the farthest one tried.
 mouseXY = s.mouseXY;
 if s.t - s.mouseSeenAt > 2; mouseXY = zeros(0, 2); end
 half = g.dimsCm / 2;
-static = isStatic(P);
+onScreen = P.spawnOnScreen || isStatic(P);
 best = -inf;
 for k = 1:50
-  if static
+  if onScreen
     pos = randomScreenPoint(g, P, objects);
   else
     pos = randomSpawnPoint(g, P);
@@ -626,7 +707,7 @@ for k = 1:50
   end
   if d >= P.spawnClearance; break; end
 end
-if static
+if onScreen
   s.heading = 2 * pi * rand();
 else
   s.heading = atan2(-s.pos(2), -s.pos(1)) + (rand() - 0.5);
@@ -643,7 +724,7 @@ s.hideTime = 0;
 end
 
 function pos = randomScreenPoint(g, P, objects)
-%RANDOMSCREENPOINT A random place on the screen for a static bug: wholly
+%RANDOMSCREENPOINT A random place on the screen for the bug: wholly
 %   on the screen, clear of blocked areas and not under a hiding object.
 margin = P.bugLength / 2 + 1; % cm from the screen edge
 range = g.dimsCm / 2 - margin;

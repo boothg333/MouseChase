@@ -42,8 +42,10 @@ for k = 1:2:numel(varargin); o.(varargin{k}) = varargin{k+1}; end
 B = m.bug; % [time x y heading hidden alive threatLevel]
 E = m.touchEvents; % [type id x y w h time]
 K = m.catchLog; % [time x y rewarded]
-P = struct('catchRadius', 3, 'rewardSize', NaN, 'trainingStage', NaN, ...
-  'rewardProbability', NaN, 'visualRange', NaN);
+% Sessions before 2026-10-23 caught within catchRadius of the bug's centre,
+% later ones within catchMargin of its outline (see isCatch)
+P = struct('catchRadius', 3, 'catchMargin', NaN, 'bugLength', NaN, 'bugWidth', NaN, ...
+  'rewardSize', NaN, 'trainingStage', NaN, 'rewardProbability', NaN, 'visualRange', NaN);
 if isfield(m, 'params') && isstruct(m.params)
   for f = fieldnames(P)'
     if isfield(m.params, f{1}); P.(f{1}) = m.params.(f{1}); end
@@ -69,7 +71,11 @@ S.touches = E;
 
 %% Contacts at each bug update, nearest paw to the bug
 nB = size(B, 1);
+% In play: alive and not yet caught. Since the caught animation (logs with
+% an 8th column, 'caught') the bug stays alive, frozen, for a while after
+% the catch; a trial ends at the catch itself.
 alive = B(:,6) == 1;
+if size(B, 2) >= 8; alive = alive & B(:,8) == 0; end
 visible = alive & B(:,5) == 0;
 [Ci, Cx, Cy] = contactsAtUpdates(B(:,1), E);
 dC = hypot(Cx - B(Ci,2), Cy - B(Ci,3));
@@ -129,7 +135,7 @@ end
 shiftedRow = @(rows, s) V(mod(inV(rows) - 1 + s, nV) + 1);
 
 % Landings: how close to the bug the paws come down (descriptive only: a
-% visible bug never has a paw within the catch radius, as that ends the
+% visible bug never has a paw within catching distance, as that ends the
 % trial, so a time-shifted bug isn't a fair chance level here)
 rowL = lastAtOrBefore(B(:,1), L(:,7)); % bug update before the landing
 okL = ~isnan(rowL);
@@ -176,8 +182,7 @@ for k = find(tr.caught)'
     cnt = nPer(r);
     ent = repelem(c0(r) - [0; cumsum(cnt(1:end-1))], cnt) + (1:sum(cnt))';
     iRow = repelem((1:numel(rows))', cnt);
-    hit = hypot(Cx(ent) - B(rows(iRow),2), Cy(ent) - B(rows(iRow),3)) <= P.catchRadius ...
-      & canCatch(iRow);
+    hit = isCatch([Cx(ent) Cy(ent)], B(rows(iRow),2:4), P) & canCatch(iRow);
     if any(hit); tHit(s) = B(rows(iRow(find(hit, 1))),1) - B(spawn(k),1); end
   end
   % within an update counts as equally fast (touch reports arrive a few ms
@@ -414,6 +419,41 @@ function i = lastAtOrBefore(t, q)
 k = discretize(q(:), [tu; inf]);
 i = nan(numel(q), 1);
 i(~isnan(k)) = last(k(~isnan(k)));
+end
+
+function hit = isCatch(xy, bug, P)
+%ISCATCH Would contacts at XY (N x 2) catch the bug at BUG ([x y heading],
+%   one row per contact)? Within catchMargin of the bug's outline, or for
+%   older sessions (no catchMargin) within catchRadius of its centre.
+%   (Leaves out the snout reach, which needs the contacts' velocities.)
+if isnan(P.catchMargin)
+  hit = hypot(xy(:,1) - bug(:,1), xy(:,2) - bug(:,2)) <= P.catchRadius;
+else
+  hit = outlineDistance(xy, bug(:,1:2), bug(:,3), P.bugLength, P.bugWidth) <= P.catchMargin;
+end
+end
+
+function d = outlineDistance(xy, pos, heading, len, wid)
+%OUTLINEDISTANCE Distance (cm) from each point XY (N x 2) to the outline of
+%   a bug (an ellipse LEN x WID, centred at POS, long axis along HEADING in
+%   rad); 0 for points on the bug. POS and HEADING may also have one row
+%   per point. A copy of MouseChaseTouch's (which can't share a file).
+a = len / 2;
+b = wid / 2;
+rel = xy - pos;
+u = abs(rel(:,1) .* cos(heading) + rel(:,2) .* sin(heading)); % along the body
+v = abs(-rel(:,1) .* sin(heading) + rel(:,2) .* cos(heading)); % across it
+d = zeros(size(xy, 1), 1);
+out = (u / a) .^ 2 + (v / b) .^ 2 > 1;
+if ~any(out); return; end
+% By symmetry, the distance to one quarter of the outline will do
+t = linspace(0, pi / 2, 33);
+qx = a * cos(t); qy = b * sin(t);
+ax = qx(1:end-1); ay = qy(1:end-1); % segment starts (1 x 32)
+dx = diff(qx); dy = diff(qy);
+wx = u(out) - ax; wy = v(out) - ay;
+f = min(max((wx .* dx + wy .* dy) ./ (dx .^ 2 + dy .^ 2), 0), 1);
+d(out) = sqrt(min((wx - f .* dx) .^ 2 + (wy - f .* dy) .^ 2, [], 2));
 end
 
 function lab = bwlabelRuns(b)
