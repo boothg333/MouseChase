@@ -306,7 +306,7 @@ function v = stageValues(stage)
 %   snoutReach cm = extra catch margin for a contact moving towards the
 %   bug at p.snoutSpeed or more (the snout reaches ahead of the paws).
 %            bugLength bugWidth catchMargin visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects spawnOnScreen keepOut snoutReach
-ladder = [  12.0       4.8      2.0          0          15          45                0             0.5           20        6           1.0               20.0       0             1             1       3
+ladder = [  9.0       3.6      2.0          0          15          45                0             0.5           20        6           1.0               20.0       0             1             1       3
              6.0       2.4      1.0          0          15          45               12             0.5           20       12           1.0               15.0       0             0             0       0
              5.25      2.1      0.8          6          15          45               60             0.5           20       18           1.0               12.5       0             0             0       0
              4.5       1.8      0.55        10          10          35              108             0.8           40       24           1.0               10.0       1             0             0       0
