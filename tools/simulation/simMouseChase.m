@@ -246,6 +246,11 @@ for f = fieldnames(events)'
   end
 end
 L = logs(events);
+% Rigbox counts used trials by adding up endTrial's values: each must be 1
+% (true), or sessions end early (exp.trialConditions, numRepeats)
+fprintf('Trial ends: %d, Rigbox''s trial tally (sum of values): %g -> %s\n', ...
+  numel(L.endTrialValues), sum(double(L.endTrialValues)), ...
+  iff(sum(double(L.endTrialValues)) == numel(L.endTrialValues), 'OK', 'WRONG'));
 fprintf('Saved events OK: %s\n', strjoin(fieldnames(L)', ', '));
 % The task's own log, saved by finishSession at expStop
 f = dir(fullfile(logDir, '*_MouseChase.mat'));

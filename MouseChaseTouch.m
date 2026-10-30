@@ -112,7 +112,10 @@ state = tRun.scan(@(s, tNow, P, e, ref) updateGame(s, tNow, P, e, ref, ctx), see
 catchCount = state.catchCount.skipRepeats();
 events.catches = catchCount.keepWhen(catchCount > 0);
 trialCount = state.trialCount.skipRepeats();
-events.endTrial = trialCount.keepWhen(trialCount > 0);
+% NB endTrial must carry true: Rigbox counts used trials by adding up its
+% values (exp.trialConditions: advanceTrial.scan(@plus)), so sending the
+% running count ended sessions after ~45 trials (1+2+...+45 > numRepeats)
+events.endTrial = trialCount.keepWhen(trialCount > 0).then(true);
 rewardCount = state.rewardCount.skipRepeats();
 rewardEvent = rewardCount.keepWhen(rewardCount > 0);
 % Whether a catch is rewarded is drawn in updateGame (p.rewardProbability)
