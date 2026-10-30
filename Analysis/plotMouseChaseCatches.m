@@ -18,7 +18,7 @@ function figs = plotMouseChaseCatches(source, varargin)
 %     'rewardPos' spout position, cm ([-20 3], measured from the video)
 %   Frames are shown in screen centimetres, oriented like the other plots.
 
-o = struct('catches', [], 'offsets', [-2 -1 -0.5 -0.2 0], 'clips', false, 'saveDir', '', ...
+o = struct('catches', [], 'offsets', [-1 -0.75 -0.5 -0.25 0 0.25 0.5 0.75 1], 'clips', false, 'saveDir', '', ...
   'root', '', 'rewardPos', [-20 3]);
 args = varargin;
 if isstruct(source) % (m, folder, ...)
