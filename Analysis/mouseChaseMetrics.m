@@ -13,6 +13,8 @@ function S = mouseChaseMetrics(m, varargin)
 %                 video of the EB056 sessions, just past the left screen edge)
 %     'spoutDist' cm, the mouse is at the spout within this distance (see
 %                 mouseChaseMetrics>spoutVisits; default depends on 'track')
+%     'spoutWindow'  s, going to the spout counts within this time of a
+%                 catch (5); also the span of the aligned spout distance
 %
 %   Chance levels: the bug's trajectory is shifted in time against the
 %   touches (circularly, over the times it was visible), which keeps where
@@ -36,7 +38,7 @@ function S = mouseChaseMetrics(m, varargin)
 %     touches    touch events with times converted to block time
 
 o = struct('nearDist', 5, 'nShuffle', 20, 'minShift', 60, 'pursuitMaxDist', 15, ...
-  'track', [], 'rewardPos', [-20 3], 'spoutDist', []);
+  'track', [], 'rewardPos', [-20 3], 'spoutDist', [], 'spoutWindow', 5);
 for k = 1:2:numel(varargin); o.(varargin{k}) = varargin{k+1}; end
 
 B = m.bug; % [time x y heading hidden alive threatLevel]
@@ -220,7 +222,7 @@ if isempty(o.spoutDist)
 end
 dSpout = hypot(mouseXY(:,1) - o.rewardPos(1), mouseXY(:,2) - o.rewardPos(2));
 atSpout = dSpout <= o.spoutDist;
-maxWait = 30; % s
+maxWait = o.spoutWindow; % s
 latency = @(t0) spoutLatency(B(:,1), atSpout, t0, maxWait);
 tr.spoutLatency = nan(nT, 1);
 tr.spoutLatency(tr.caught) = latency(tr.tSpawn(tr.caught) + tr.timeToCatch(tr.caught));
@@ -238,7 +240,7 @@ for k = 1:numel(tCatch)
   tRand = [tRand; B(cand(randi(rs, numel(cand), 20, 1)),1)]; %#ok<AGROW>
 end
 latRand = latency(tRand);
-tAl = -5:dtA:20;
+tAl = -maxWait:dtA:maxWait;
 alignedSpout = @(t0) interp1(B(:,1), dSpout, t0(:) + tAl, 'linear', NaN);
 S.spout = struct('pos', o.rewardPos, 'dist', o.spoutDist, 'tAligned', tAl, ...
   'afterCatch', alignedSpout(K(:,1)), 'afterRandom', alignedSpout(tRand), ...
@@ -270,8 +272,8 @@ lc = tr.spoutLatency(tr.caught); lc(isnan(lc)) = Inf;
 lr = latRand; lr(isnan(lr)) = Inf;
 S.medianSpoutLatency = median(lc);
 S.chanceMedianSpoutLatency = median(lr);
-S.fracSpoutWithin10s = mean(lc <= 10);
-S.chanceFracSpoutWithin10s = mean(lr <= 10);
+S.fracSpoutInWindow = mean(lc <= maxWait); % within spoutWindow of a catch
+S.chanceFracSpoutInWindow = mean(lr <= maxWait);
 S.landingsPerMin = sum(L(:,7) >= tStart) / S.duration * 60;
 S.medianLandingDist = median(dLand);
 S.pursuitIndex = mean(pursuit); % -1 away from the bug ... 1 straight at it

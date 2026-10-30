@@ -10,7 +10,8 @@ function [T, S] = plotMouseChaseLearning(sessions, varargin)
 %     finding vs hitting: time until a paw is near the bug, and from there
 %       to the catch
 %     activity: distance moved (from the touches)
-%     going to the reward spout within 10 s of a catch, against random times
+%     going to the reward spout soon after a catch (within 'spoutWindow' s,
+%       see mouseChaseMetrics), against random times
 %     approach before the catches, one curve per session
 %     catches per minute within each session (engagement)
 %   Training stage changes are marked. PLOTMOUSECHASELEARNING(SESSIONS)
@@ -58,8 +59,8 @@ if isempty(subject); subject = regexprep(S(1).expRef, '^\d{4}-\d{2}-\d{2}_\d+_',
 cols = {'expRef', 'date', 'trainingStage', 'rewardSize', 'environment', 'duration', 'catches', ...
   'catchesPerMin', 'medianTimeToCatch', 'fracCaughtWithin10s', 'catchSpeedVsChance', ...
   'pursuitIndex', 'chancePursuitIndex', 'medianTimeToNear', 'medianNearToCatch', ...
-  'landingsPerMin', 'distanceMovedPerMin', 'rewardVolume', 'fracSpoutWithin10s', ...
-  'chanceFracSpoutWithin10s', 'medianSpoutLatency', 'chanceMedianSpoutLatency', 'mousePosition'};
+  'landingsPerMin', 'distanceMovedPerMin', 'rewardVolume', 'fracSpoutInWindow', ...
+  'chanceFracSpoutInWindow', 'medianSpoutLatency', 'chanceMedianSpoutLatency', 'mousePosition'};
 T = struct2table(rmfield(S, setdiff(fieldnames(S), cols)), 'AsArray', true);
 T = T(:, cols);
 disp(T(:, {'expRef', 'trainingStage', 'catches', 'catchesPerMin', 'medianTimeToCatch', ...
@@ -120,10 +121,10 @@ ylabel(ax, 'cm / min'); title(ax, 'Activity: distance moved');
 ylim(ax, [0 max([S.distanceMovedPerMin]) * 1.2 + eps]);
 
 ax = sessionAxes(tl, x, labels, S, c);
-h1 = byMethod(ax, x, 100 * [S.chanceFracSpoutWithin10s], c.muted, isVideo);
-h2 = byMethod(ax, x, 100 * [S.fracSpoutWithin10s], c.mouse, isVideo);
+h1 = byMethod(ax, x, 100 * [S.chanceFracSpoutInWindow], c.muted, isVideo);
+h2 = byMethod(ax, x, 100 * [S.fracSpoutInWindow], c.mouse, isVideo);
 ylim(ax, [0 100]);
-ylabel(ax, '% at the spout within 10 s');
+ylabel(ax, sprintf('%% at the spout within %g s', S(1).spout.maxWait));
 title(ax, 'To the spout after a catch');
 legend(ax, [h1 h2], {'random times, as far from the spout', 'after catches'}, 'Location', 'best', 'Box', 'off');
 

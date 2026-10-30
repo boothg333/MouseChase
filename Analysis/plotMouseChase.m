@@ -218,15 +218,15 @@ xlim(ax, Sp.tAligned([1 end]));
 c.style(ax);
 
 ax = nexttile(tl, 12); hold(ax, 'on');
-tq = 0:0.5:Sp.maxWait;
+tq = 0:0.1:Sp.maxWait;
 lc = S.trials.spoutLatency(S.trials.caught);
 cumFrac = @(l) mean(l(:) <= tq, 1); % NaN (not within maxWait) counts as never
 stairs(ax, tq, cumFrac(Sp.latencyRandom), 'Color', c.muted, 'LineWidth', 2);
 stairs(ax, tq, cumFrac(lc), 'Color', c.mouse, 'LineWidth', 2);
 ylim(ax, [0 1]);
 xlabel(ax, 'time (s)'); ylabel(ax, 'fraction at the spout by then');
-title(ax, sprintf('To the spout: median %.1f s after a catch (random times %.1f s)', ...
-  S.medianSpoutLatency, S.chanceMedianSpoutLatency));
+title(ax, sprintf('To the spout: median %s after a catch (random times %s)', ...
+  latencyStr(S.medianSpoutLatency, Sp.maxWait), latencyStr(S.chanceMedianSpoutLatency, Sp.maxWait)));
 legend(ax, {'random times', 'catches'}, 'Location', 'southeast', 'Box', 'off');
 c.style(ax);
 
@@ -243,6 +243,10 @@ end
 
 %% ===================== Helpers =====================
 
+function s = latencyStr(l, maxWait)
+%LATENCYSTR A median latency as text (Inf: not within maxWait).
+if isinf(l); s = sprintf('> %g s', maxWait); else; s = sprintf('%.1f s', l); end
+end
 
 function band(ax, t, X, col)
 %BAND Mean +- s.e.m. over the rows of X.
