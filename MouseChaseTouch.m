@@ -306,10 +306,10 @@ function v = stageValues(stage)
 %   snoutReach cm = extra catch margin for a contact moving towards the
 %   bug at p.snoutSpeed or more (the snout reaches ahead of the paws).
 %            bugLength bugWidth catchMargin visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects spawnOnScreen keepOut snoutReach
-ladder = [  9.0       3.6      2.0          0          15          45                0             0.5           20        6           1.0               20.0       0             1             1       3
-             6.0       2.4      1.0          0          15          45               12             0.5           20       12           1.0               15.0       0             0             0       0
-             5.25      2.1      0.8          6          15          45               60             0.5           20       18           1.0               12.5       0             0             0       0
-             4.5       1.8      0.55        10          10          35              108             0.8           40       24           1.0               10.0       1             0             0       0
+ladder = [  9.0       3.6      2.0          0          15          45                0             0.5           20        6           1.0               12.0       0             1             1       3
+             6.0       2.4      1.0          0          15          45               12             0.5           20       12           1.0               12.0       0             0             0       0
+             5.25      2.1      0.8          6          15          45               60             0.5           20       18           1.0               10.0       0             0             0       0
+             4.5       1.8      0.55        10          10          35              108             0.8           40       24           1.0               9.0       1             0             0       0
              3.9       1.5      0.45        14           7          28              162             1.0           60       24           0.9                7.5       1             0             0       0
              3.6       1.35     0.35        18           5          22              210             1.3           90       30           0.8                5.0       1             0             0       0];
 names = {'bugLength', 'bugWidth', 'catchMargin', 'visualRange', 'threatSpeed', ...
