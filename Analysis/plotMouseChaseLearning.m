@@ -48,7 +48,12 @@ for k = 1:numel(sessions)
   fprintf('%s\n', m.expRef);
   opts = mOpts;
   if o.video && exist(fullfile(folder, [m.expRef '_topCam.mj2']), 'file')
-    opts = [opts, {'track', mouseChaseTrack(m, folder)}]; %#ok<AGROW>
+    try
+      opts = [opts, {'track', mouseChaseTrack(m, folder)}]; %#ok<AGROW>
+    catch e % e.g. a video that was never finalised: touches for this session
+      warning('plotMouseChaseLearning:noTrack', '%s: no video tracking, using the touches (%s)', ...
+        m.expRef, e.message);
+    end
   end
   S{k} = mouseChaseMetrics(m, opts{:});
 end
