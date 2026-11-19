@@ -63,6 +63,7 @@ ctx = containers.Map();
 % the definition has run, so they can't be found from the callbacks later
 envDir = fullfile(fileparts(mfilename('fullpath')), 'MouseChaseEnvironments');
 ctx('readerScript') = fullfile(fileparts(mfilename('fullpath')), 'tools', 'touchReader.ps1');
+ctx('analysisDir') = fullfile(fileparts(mfilename('fullpath')), 'Analysis'); % (see adviseNextStage)
 
 %% Parameters
 % The game functions receive the whole parameter struct, but mc only lists
@@ -75,7 +76,7 @@ gamePars = {'rewardProbability', 'catchMargin', 'respawnDelay', 'bugLength', 'bu
   'targetCatches', 'maxDuration', 'rewardSize', 'hidingObjects', ...
   'gaborCycles', 'gaborContrast', 'gaborColour', 'maxCatchContactSize', ...
   'caughtDuration', 'caughtGrowth', 'caughtFlashRate', 'spawnClearance', ...
-  'spawnOnScreen', 'keepOut', 'keepOutMargin', 'snoutReach', 'snoutSpeed'};
+  'spawnOnScreen', 'keepOut', 'keepOutMargin', 'snoutReach', 'snoutSpeed', 'nextStageAdvice'};
 for iPar = 1:numel(gamePars); p.(gamePars{iPar}); end
 
 %% Environment
@@ -253,6 +254,8 @@ try
   p.creviceDepth = 4.5;      % cm the bug may go past the screen edge
   p.maxHideTime = 2;         % s past the screen edge before it comes back out
   p.showTouches = false;     % draw red markers on active contacts (costly: checks only)
+  p.nextStageAdvice = true;  % after the session: the recommended stage for the next one
+                             % (Analysis/mouseChaseNextStage), printed and saved next to the log
   p.updateRate = 30;         % game/screen updates per second (60 = every frame)
   p.startDelay = 3;          % s before the bug first appears (while things start up)
 catch
@@ -689,6 +692,44 @@ for d = reshape(cellstr(dirs), 1, [])
     warning('MouseChase:logNotSaved', 'Could not save %s: %s', f, ex.message);
   end
 end
+if isempty(getenv('MOUSECHASE_LOG_DIR')) && isstruct(mouseChase.params) && ...
+    isfield(mouseChase.params, 'nextStageAdvice') && mouseChase.params.nextStageAdvice
+  adviseNextStage(ref, dirs, ctx('analysisDir'));
+end
+end
+
+function adviseNextStage(ref, dirs, analysisDir)
+%ADVISENEXTSTAGE The recommended training stage for the subject's next
+%   session (Analysis/mouseChaseNextStage), a few seconds after the session:
+%   from a timer, so that Rigbox first finishes the session (block file
+%   saved, mc told). Printed in this computer's command window and saved as
+%   <expRef>_nextStage.txt next to the log. It takes ~15 s (EB056's 18
+%   sessions, none cached yet; less once they are), during which this
+%   MATLAB is busy. Any error is only reported.
+dirs = reshape(cellstr(dirs), 1, []);
+tm = timer('StartDelay', 5, 'TimerFcn', @(t, ~) advise(t));
+start(tm);
+  function advise(t)
+  try
+    if ~contains(path, analysisDir); addpath(analysisDir); end
+    subject = regexprep(ref, '^\d{4}-\d{2}-\d{2}_\d+_', '');
+    % the subjects folder this session was saved under (the last of dirs:
+    % the server), root\subject\date\seq
+    root = fileparts(fileparts(fileparts(char(dirs{end}))));
+    rec = []; % (evalc can't create variables in a nested function)
+    txt = evalc('rec = mouseChaseNextStage(subject, ''root'', root);');
+    txt = regexprep(txt, '</?strong>', ''); % (the table display's bold)
+    head = sprintf('MouseChase: %s\nNEXT SESSION: stage %d (%s)\n\n', ref, rec.nextStage, rec.action);
+    fprintf('\n%s%s\n', head, txt);
+    for d = dirs
+      fid = fopen(fullfile(d{1}, [ref '_nextStage.txt']), 'w');
+      if fid > 0; fprintf(fid, '%s%s', head, txt); fclose(fid); end
+    end
+  catch ex
+    warning('MouseChase:nextStage', 'No stage advice for the next session: %s', ex.message);
+  end
+  stop(t); delete(t);
+  end
 end
 
 function s = spawnBug(s, g, P, objects)
