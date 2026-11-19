@@ -218,9 +218,9 @@ try
   % NaN = take the value from the training stage (see stageValues);
   % a number overrides the stage for that setting
   p.catchMargin = NaN;       % cm beyond the bug's outline that a contact still catches it (>= 0)
-  p.maxCatchContactSize = Inf; % cm, larger contacts (width or height) can't catch: a dragged tail
-                             % shows as a large contact, a paw strike as a small one (1.3 rejected
-                             % ~40% of tail catches and no paw catches in EB056's videos)
+  p.maxCatchContactSize = NaN; % cm, larger contacts (width or height) can't catch: a dragged tail
+                             % or body shows as a large contact, a paw strike as a small one
+                             % (NaN: from the stage, see stageValues)
   p.caughtDuration = 2;      % s a caught bug stays frozen and flashing (reward half way)
   p.caughtGrowth = 1.5;      % size of the caught bug, relative to its normal size
   p.caughtFlashRate = 3;     % Hz, black-white-black cycles of the caught bug's stripes
@@ -308,6 +308,10 @@ function v = stageValues(stage)
 %   p.keepOutMargin of a contact (so a still paw can't catch it), 0 = off.
 %   snoutReach cm = extra catch margin for a contact moving towards the
 %   bug at p.snoutSpeed or more (the snout reaches ahead of the paws).
+%   maxCatchContactSize cm = larger contacts can't catch: none at stage 1
+%   (generous), 1.0 from stage 2. Against 147 hand-labelled catches of
+%   EB056/EB058 (2026-10/11), 1.0 rejected ~40% of the catches made by a
+%   tail, body or incidental paw, and ~3% of deliberate strikes.
 %            bugLength bugWidth catchMargin visualRange threatSpeed fullThreatSpeed maxEscapeThrust maxEscapeTime easeTime wanderThrust rewardProbability rewardSize hidingObjects spawnOnScreen keepOut snoutReach
 ladder = [  9.0       3.6      2.0          0          15          45                0             0.5           20        6           1.0               12.0       0             1             1       3
              6.0       2.4      1.0          0          15          45               12             0.5           20       12           1.0               12.0       0             0             0       0
@@ -319,8 +323,11 @@ names = {'bugLength', 'bugWidth', 'catchMargin', 'visualRange', 'threatSpeed', .
   'fullThreatSpeed', 'maxEscapeThrust', 'maxEscapeTime', 'easeTime', ...
   'wanderThrust', 'rewardProbability', 'rewardSize', 'hidingObjects', ...
   'spawnOnScreen', 'keepOut', 'snoutReach'};
-row = ladder(min(max(round(stage), 1), size(ladder, 1)), :);
+i = min(max(round(stage), 1), size(ladder, 1));
+row = ladder(i, :);
 v = cell2struct(num2cell(row(:)), names(:), 1);
+maxContact = [Inf 1.0 1.0 1.0 1.0 1.0]; % cm, per stage (see above)
+v.maxCatchContactSize = maxContact(i);
 end
 
 function static = isStatic(P)
