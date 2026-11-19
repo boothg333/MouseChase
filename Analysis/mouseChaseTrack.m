@@ -18,10 +18,12 @@ function T = mouseChaseTrack(m, folder, varargin)
 %     'step'      track every step-th frame (2)
 %     'frames'    frame range (for testing; not cached)
 %     'cacheDir', 'redo'  as in mouseChaseVideo
-%     'parallax'  [k cx cy]: the camera sees the mouse's back, a few cm above
-%                 the screen, so it appears k (fraction) further out from
-%                 (cx, cy) cm than the paws under it ([0.05 -2.6 -2.6], fitted
-%                 from the touch-to-mouse offsets of EB056's sessions)
+%     'parallax'  [k cx cy]: if the camera sees the mouse's back k (fraction)
+%                 further out from (cx, cy) cm than the paws under it. Default
+%                 [0 0 0]: with mouseChaseVideo's transform fitted to the bug,
+%                 the touch-to-mouse offsets of EB056's sessions show none.
+%                 (The 5% once fitted here was the transform's error: the
+%                 walls hide the screen's edges, see mouseChaseVideo.)
 %
 %   The mouse: pixels much darker than the background (frame/background <
 %   0.55 for the body, < 0.75 for the thin tail; the background is the 80th percentile of frames over the session,
@@ -30,7 +32,7 @@ function T = mouseChaseTrack(m, folder, varargin)
 %   (kept: the largest blob) from thin parts: tail, and legs sticking out.
 
 o = struct('step', 2, 'frames', [], 'cacheDir', fullfile(tempdir, 'MouseChase'), 'redo', false, ...
-  'parallax', [0.05 -2.6 -2.6]);
+  'parallax', [0 0 0]);
 for k = 1:2:numel(varargin); o.(varargin{k}) = varargin{k+1}; end
 cacheFile = fullfile(o.cacheDir, [m.expRef '_track.mat']);
 if isempty(o.frames) && exist(cacheFile, 'file') && ~o.redo

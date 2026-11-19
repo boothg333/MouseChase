@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\inventory.m'\\)\")",
+      "PowerShell(\\(Get-CimInstance Win32_Processor | Measure-Object NumberOfLogicalProcessors -Sum\\).Sum; [int]\\(\\(Get-CimInstance Win32_OperatingSystem\\).FreePhysicalMemory/1MB\\); & \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"v=ver; disp\\(strjoin\\({v.Name}, ' | '\\)\\)\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\testTable.m'\\)\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\checkOffset.m'\\)\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\checkCorners.m'\\)\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"try, run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\testProjection.m'\\), catch e, disp\\(e.message\\), end\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"try, run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\readHw.m'\\), catch e, disp\\(getReport\\(e\\)\\), end\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\MATLAB\\\\R2024b\\\\bin\\\\matlab.exe\" -batch \"try, run\\('C:\\\\Users\\\\EnnyB\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\4e7601a234e763b6\\\\f16985d4-7b03-48ac-8825-cdb662ff8a3d\\\\scratchpad\\\\touchFrame.m'\\), catch e, disp\\(getReport\\(e\\)\\), end\")",
+      "PowerShell(Test-Path \"C:\\\\Users\\\\EnnyB\\\\Documents\\\\MouseChaseAnalysis\\\\catchLabels.csv\"; if \\(Test-Path \"C:\\\\Users\\\\EnnyB\\\\Documents\\\\MouseChaseAnalysis\\\\catchLabels.csv\"\\) { \\(Import-Csv \"C:\\\\Users\\\\EnnyB\\\\Documents\\\\MouseChaseAnalysis\\\\catchLabels.csv\"\\).Count })"
+    ]
+  }
+}
